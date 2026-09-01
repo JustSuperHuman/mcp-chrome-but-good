@@ -27,7 +27,8 @@ without taking over the tab or window a person is actively using.
   extension-aware `/ping`, and optional host/port overrides.
 - Native-host registration for the JustBrowse and supported upstream extension IDs.
 
-See [the architecture note](docs/JUSTBROWSE_ARCHITECTURE.md),
+See [the research and target design](docs/RESEARCH.md),
+[the architecture note](docs/JUSTBROWSE_ARCHITECTURE.md),
 [the screenshot contract](docs/SCREENSHOTS.md), and
 [the upstream PR audit](docs/UPSTREAM_PR_AUDIT.md) for implementation details.
 

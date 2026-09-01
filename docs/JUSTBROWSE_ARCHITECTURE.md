@@ -1,7 +1,7 @@
 # JustBrowseMCP architecture note
 
-The implementation and rationale are documented in
-`F:\ChromeMCP\RESEARCH.md`. This file records the repository-local boundary for
+The implementation rationale and target design are documented in
+[RESEARCH.md](RESEARCH.md). This file records the repository-local boundary for
 future development.
 
 ## Current invariant
