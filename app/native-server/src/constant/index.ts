@@ -35,6 +35,7 @@ export const HTTP_STATUS = {
   NO_CONTENT: 204,
   BAD_REQUEST: 400,
   NOT_FOUND: 404,
+  SERVICE_UNAVAILABLE: 503,
   INTERNAL_SERVER_ERROR: 500,
   GATEWAY_TIMEOUT: 504,
 } as const;
@@ -63,6 +64,19 @@ export const ERROR_MESSAGES = {
 export const CHROME_MCP_PORT_ENV = 'CHROME_MCP_PORT';
 export const MCP_HTTP_PORT_ENV = 'MCP_HTTP_PORT';
 
+/** Optional host override for WSL or remote-loopback setups. */
+export const CHROME_MCP_HOST_ENV = 'CHROME_MCP_HOST';
+export const CHROME_MCP_SESSION_IDLE_MS_ENV = 'CHROME_MCP_SESSION_IDLE_MS';
+
+export function getChromeMcpHost(): string {
+  return process.env[CHROME_MCP_HOST_ENV] || SERVER_CONFIG.HOST;
+}
+
+export function getChromeMcpSessionIdleMs(): number {
+  const configured = Number.parseInt(process.env[CHROME_MCP_SESSION_IDLE_MS_ENV] || '', 10);
+  return Number.isFinite(configured) && configured > 0 ? configured : 30 * 60 * 1000;
+}
+
 /**
  * Get the actual port the Chrome MCP server is listening on.
  * Priority: CHROME_MCP_PORT env > MCP_HTTP_PORT env > NATIVE_SERVER_PORT default
@@ -78,5 +92,5 @@ export function getChromeMcpPort(): number {
  * This URL is used by Claude/Codex agents to connect to the MCP server.
  */
 export function getChromeMcpUrl(): string {
-  return `http://${SERVER_CONFIG.HOST}:${getChromeMcpPort()}/mcp`;
+  return `http://${getChromeMcpHost()}:${getChromeMcpPort()}/mcp`;
 }

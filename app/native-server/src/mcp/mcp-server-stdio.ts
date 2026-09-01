@@ -17,6 +17,7 @@ import * as path from 'path';
 
 let stdioMcpServer: Server | null = null;
 let mcpClient: Client | null = null;
+let cleanupStarted = false;
 
 // Read configuration from stdio-config.json
 const loadConfig = () => {
@@ -52,24 +53,38 @@ export const getStdioMcpServer = () => {
   return stdioMcpServer;
 };
 
-export const ensureMcpClient = async () => {
+async function closeMcpClient(): Promise<void> {
+  const client = mcpClient;
+  mcpClient = null;
+  if (!client) return;
   try {
-    if (mcpClient) {
-      const pingResult = await mcpClient.ping();
-      if (pingResult) {
-        return mcpClient;
+    await client.close();
+  } catch {
+    // The transport is already unusable; reconnect will create a fresh one.
+  }
+}
+
+export const ensureMcpClient = async (forceNew = false) => {
+  try {
+    if (mcpClient && !forceNew) {
+      try {
+        const pingResult = await mcpClient.ping();
+        if (pingResult) return mcpClient;
+      } catch {
+        console.error('[justbrowse-stdio] Existing MCP connection is stale; reconnecting');
       }
     }
 
+    await closeMcpClient();
     const config = loadConfig();
     mcpClient = new Client({ name: 'Mcp Chrome Proxy', version: '1.0.0' }, { capabilities: {} });
     const transport = new StreamableHTTPClientTransport(new URL(config.url), {});
     await mcpClient.connect(transport);
     return mcpClient;
   } catch (error) {
-    mcpClient?.close();
-    mcpClient = null;
+    await closeMcpClient();
     console.error('Failed to connect to MCP server:', error);
+    throw error;
   }
 };
 
@@ -90,33 +105,53 @@ export const setupTools = (server: Server) => {
 };
 
 const handleToolCall = async (name: string, args: any): Promise<CallToolResult> => {
-  try {
-    const client = await ensureMcpClient();
-    if (!client) {
-      throw new Error('Failed to connect to MCP server');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const client = await ensureMcpClient(attempt > 0);
+      // Use a sane default of 2 minutes; the previous value mistakenly used 2*6*1000 (12s)
+      const DEFAULT_CALL_TIMEOUT_MS = 2 * 60 * 1000;
+      const result = await client.callTool({ name, arguments: args }, undefined, {
+        timeout: DEFAULT_CALL_TIMEOUT_MS,
+      });
+      return result as CallToolResult;
+    } catch (error: any) {
+      const message = error?.message || String(error);
+      const connectionFailure = /EOF|closed|ECONNREFUSED|fetch failed|client is closing/i.test(
+        message,
+      );
+      if (attempt === 0 && connectionFailure) {
+        console.error(`[justbrowse-stdio] Tool connection failed; retrying once: ${message}`);
+        continue;
+      }
+      return {
+        content: [{ type: 'text', text: `Error calling tool: ${message}` }],
+        isError: true,
+      };
     }
-    // Use a sane default of 2 minutes; the previous value mistakenly used 2*6*1000 (12s)
-    const DEFAULT_CALL_TIMEOUT_MS = 2 * 60 * 1000;
-    const result = await client.callTool({ name, arguments: args }, undefined, {
-      timeout: DEFAULT_CALL_TIMEOUT_MS,
-    });
-    return result as CallToolResult;
-  } catch (error: any) {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Error calling tool: ${error.message}`,
-        },
-      ],
-      isError: true,
-    };
   }
+
+  return {
+    content: [{ type: 'text', text: 'Error calling tool: retry loop exhausted' }],
+    isError: true,
+  };
 };
+
+async function cleanup(): Promise<void> {
+  if (cleanupStarted) return;
+  cleanupStarted = true;
+  await closeMcpClient();
+  try {
+    await stdioMcpServer?.close();
+  } catch {
+    // Process shutdown should not hang on an already-closed stdio transport.
+  }
+}
 
 async function main() {
   const transport = new StdioServerTransport();
   await getStdioMcpServer().connect(transport);
+  process.stdin.once('end', () => void cleanup());
+  process.stdin.once('close', () => void cleanup());
 }
 
 main().catch((error) => {

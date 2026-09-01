@@ -16,13 +16,15 @@ import {
   SERVER_CONFIG,
   HTTP_STATUS,
   ERROR_MESSAGES,
+  getChromeMcpSessionIdleMs,
 } from '../constant';
 import { NativeMessagingHost } from '../native-messaging-host';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { randomUUID } from 'node:crypto';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import { getMcpServer } from '../mcp/mcp-server';
+import { createMcpServer } from '../mcp/mcp-server';
+import { NativeMessageType } from 'chrome-mcp-shared';
 import { AgentStreamManager } from '../agent/stream-manager';
 import { AgentChatService } from '../agent/chat-service';
 import { CodexEngine } from '../agent/engines/codex';
@@ -48,6 +50,7 @@ export class Server {
   private nativeHost: NativeMessagingHost | null = null;
   private transportsMap: Map<string, StreamableHTTPServerTransport | SSEServerTransport> =
     new Map();
+  private sessionIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private agentStreamManager: AgentStreamManager;
   private agentChatService: AgentChatService;
 
@@ -110,10 +113,32 @@ export class Server {
 
   private setupHealthRoutes(): void {
     this.fastify.get('/ping', async (_request: FastifyRequest, reply: FastifyReply) => {
-      reply.status(HTTP_STATUS.OK).send({
-        status: 'ok',
-        message: 'pong',
-      });
+      if (!this.nativeHost) {
+        return reply.status(HTTP_STATUS.SERVICE_UNAVAILABLE).send({
+          status: 'error',
+          message: 'Extension bridge not available',
+          extensionConnected: false,
+        });
+      }
+
+      try {
+        await this.nativeHost.sendRequestToExtensionAndWait(
+          { ping: true },
+          NativeMessageType.PROCESS_DATA,
+          1500,
+        );
+        return reply.status(HTTP_STATUS.OK).send({
+          status: 'ok',
+          message: 'pong',
+          extensionConnected: true,
+        });
+      } catch {
+        return reply.status(HTTP_STATUS.SERVICE_UNAVAILABLE).send({
+          status: 'error',
+          message: 'Chrome extension not connected',
+          extensionConnected: false,
+        });
+      }
     });
   }
 
@@ -167,6 +192,7 @@ export class Server {
   private setupMcpRoutes(): void {
     // SSE endpoint
     this.fastify.get('/sse', async (_, reply) => {
+      reply.hijack();
       try {
         reply.raw.writeHead(HTTP_STATUS.OK, {
           'Content-Type': 'text/event-stream',
@@ -175,19 +201,25 @@ export class Server {
         });
 
         const transport = new SSEServerTransport('/messages', reply.raw);
+        const server = createMcpServer({ sessionId: transport.sessionId, transport: 'sse' });
         this.transportsMap.set(transport.sessionId, transport);
 
         reply.raw.on('close', () => {
           this.transportsMap.delete(transport.sessionId);
+          void server.close();
         });
 
-        const server = getMcpServer();
         await server.connect(transport);
 
         reply.raw.write(':\n\n');
       } catch (error) {
-        if (!reply.sent) {
-          reply.code(HTTP_STATUS.INTERNAL_SERVER_ERROR).send(ERROR_MESSAGES.INTERNAL_SERVER_ERROR);
+        if (!reply.raw.headersSent) {
+          reply.raw.writeHead(HTTP_STATUS.INTERNAL_SERVER_ERROR, {
+            'Content-Type': 'application/json',
+          });
+        }
+        if (!reply.raw.writableEnded) {
+          reply.raw.end(JSON.stringify({ error: ERROR_MESSAGES.INTERNAL_SERVER_ERROR }));
         }
       }
     });
@@ -226,30 +258,45 @@ export class Server {
           onsessioninitialized: (initializedSessionId) => {
             if (transport && initializedSessionId === newSessionId) {
               this.transportsMap.set(initializedSessionId, transport);
+              this.touchStreamableSession(initializedSessionId, transport);
             }
           },
+        });
+
+        const server = createMcpServer({
+          sessionId: newSessionId,
+          transport: 'streamable-http',
         });
 
         transport.onclose = () => {
           if (transport?.sessionId && this.transportsMap.get(transport.sessionId)) {
             this.transportsMap.delete(transport.sessionId);
           }
+          this.clearSessionIdleTimer(newSessionId);
+          void this.releaseBrowserSession(newSessionId);
+          void server.close();
         };
-        await getMcpServer().connect(transport);
+        await server.connect(transport);
       } else {
         reply.code(HTTP_STATUS.BAD_REQUEST).send({ error: ERROR_MESSAGES.INVALID_MCP_REQUEST });
         return;
       }
 
+      reply.hijack();
       try {
         await transport.handleRequest(request.raw, reply.raw, request.body);
       } catch (error) {
-        if (!reply.sent) {
-          reply
-            .code(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-            .send({ error: ERROR_MESSAGES.MCP_REQUEST_PROCESSING_ERROR });
+        if (!reply.raw.headersSent) {
+          reply.raw.writeHead(HTTP_STATUS.INTERNAL_SERVER_ERROR, {
+            'Content-Type': 'application/json',
+          });
+          reply.raw.end(JSON.stringify({ error: ERROR_MESSAGES.MCP_REQUEST_PROCESSING_ERROR }));
+        } else if (!reply.raw.writableEnded) {
+          reply.raw.end();
         }
       }
+
+      if (sessionId && transport) this.touchStreamableSession(sessionId, transport);
     });
 
     // MCP GET endpoint (SSE stream)
@@ -264,16 +311,12 @@ export class Server {
         return;
       }
 
-      reply.raw.setHeader('Content-Type', 'text/event-stream');
-      reply.raw.setHeader('Cache-Control', 'no-cache');
-      reply.raw.setHeader('Connection', 'keep-alive');
-      reply.raw.flushHeaders();
-
+      this.touchStreamableSession(sessionId as string, transport);
+      // StreamableHTTPServerTransport owns the raw response, including SSE
+      // headers and its lifecycle. Fastify must not write a second response.
+      reply.hijack();
       try {
         await transport.handleRequest(request.raw, reply.raw);
-        if (!reply.sent) {
-          reply.hijack();
-        }
       } catch (error) {
         if (!reply.raw.writableEnded) {
           reply.raw.end();
@@ -297,19 +340,66 @@ export class Server {
         return;
       }
 
+      reply.hijack();
       try {
         await transport.handleRequest(request.raw, reply.raw);
-        if (!reply.sent) {
-          reply.code(HTTP_STATUS.NO_CONTENT).send();
+        if (!reply.raw.writableEnded) {
+          reply.raw.end();
         }
       } catch (error) {
-        if (!reply.sent) {
-          reply
-            .code(HTTP_STATUS.INTERNAL_SERVER_ERROR)
-            .send({ error: ERROR_MESSAGES.MCP_SESSION_DELETION_ERROR });
+        if (!reply.raw.headersSent) {
+          reply.raw.writeHead(HTTP_STATUS.INTERNAL_SERVER_ERROR, {
+            'Content-Type': 'application/json',
+          });
+          reply.raw.end(JSON.stringify({ error: ERROR_MESSAGES.MCP_SESSION_DELETION_ERROR }));
+        } else if (!reply.raw.writableEnded) {
+          reply.raw.end();
         }
       }
+
+      this.clearSessionIdleTimer(sessionId as string);
+      this.transportsMap.delete(sessionId as string);
+      void this.releaseBrowserSession(sessionId as string);
     });
+  }
+
+  private touchStreamableSession(
+    sessionId: string,
+    transport: StreamableHTTPServerTransport,
+  ): void {
+    this.clearSessionIdleTimer(sessionId);
+    const timer = setTimeout(() => {
+      this.sessionIdleTimers.delete(sessionId);
+      if (this.transportsMap.get(sessionId) !== transport) return;
+      this.transportsMap.delete(sessionId);
+      void transport.close().catch(() => this.releaseBrowserSession(sessionId));
+    }, getChromeMcpSessionIdleMs());
+    timer.unref?.();
+    this.sessionIdleTimers.set(sessionId, timer);
+  }
+
+  private clearSessionIdleTimer(sessionId: string): void {
+    const timer = this.sessionIdleTimers.get(sessionId);
+    if (timer) clearTimeout(timer);
+    this.sessionIdleTimers.delete(sessionId);
+  }
+
+  private async releaseBrowserSession(sessionId: string): Promise<void> {
+    if (!this.nativeHost) return;
+    try {
+      await this.nativeHost.sendRequestToExtensionAndWait(
+        {
+          name: '__justbrowse_release_session',
+          args: {
+            __justBrowse: { sessionId, transport: 'streamable-http' },
+          },
+        },
+        NativeMessageType.CALL_TOOL,
+        5000,
+      );
+    } catch (error) {
+      console.warn(`[JustBrowse] Failed to release browser session ${sessionId}`, error);
+    }
   }
 
   // ============================================================
@@ -347,6 +437,8 @@ export class Server {
     }
 
     try {
+      for (const timer of this.sessionIdleTimers.values()) clearTimeout(timer);
+      this.sessionIdleTimers.clear();
       await this.fastify.close();
       closeDb();
       this.isRunning = false;

@@ -47,3 +47,8 @@ CLAUDE.md
 
 .docs/
 .claude/
+
+# Local browser integration artifacts
+/live-test-output/
+/chrome-mcp-server-1.0.0-chrome/
+/chrome-mcp-server-1.0.0-chrome.zip

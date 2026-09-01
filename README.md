@@ -1,104 +1,87 @@
-# Chrome MCP Server 🚀
+# JustBrowseMCP
 
-[![Stars](https://img.shields.io/github/stars/hangwin/mcp-chrome)](https://img.shields.io/github/stars/hangwin/mcp-chrome)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.8+-blue.svg)](https://www.typescriptlang.org/)
-[![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-green.svg)](https://developer.chrome.com/docs/extensions/)
-[![Release](https://img.shields.io/github/v/release/hangwin/mcp-chrome.svg)](https://img.shields.io/github/v/release/hangwin/mcp-chrome.svg)
+JustBrowseMCP is a privacy-focused fork of
+[`hangwin/mcp-chrome`](https://github.com/hangwin/mcp-chrome) for controlling your
+existing Chrome browser through the Model Context Protocol (MCP). It keeps the
+upstream extension-and-native-host architecture while adding per-client tab
+ownership, background-first browser work, and screenshots that are returned as
+native MCP image content.
 
-> 🌟 **Turn your Chrome browser into your intelligent assistant** - Let AI take control of your browser, transforming it into a powerful AI-controlled automation tool.
+The project is intended for agents that must use an existing signed-in browser
+without taking over the tab or window a person is actively using.
 
-**📖 Documentation**: [English](README.md) | [中文](README_zh.md)
+## What this fork changes
 
-> The project is still in its early stages and is under intensive development. More features, stability improvements, and other enhancements will follow.
+- One MCP server instance and private browser-session identity per transport.
+- Session-owned tab leases, persisted across extension service-worker suspension.
+- Logical tab switching that does not activate a Chrome tab or focus its window.
+- Background-first navigation, page inspection, computer actions, and screenshots.
+- Collapsed `JustBrowse <session>` tab groups for inactive session tabs.
+- Cross-session protection for tab access, tab closing, and tab moves.
+- `chrome_move_tab` for state-preserving moves between windows or into a new window.
+- Tab-targeted `chrome_network_request` calls that retain the selected tab's browser
+  context.
+- Direct MCP image results for viewport, full-page, element, and
+  `chrome_computer` screenshots.
+- Streamable HTTP lifecycle cleanup, idle-session expiry, stdio reconnection, a real
+  extension-aware `/ping`, and optional host/port overrides.
+- Native-host registration for the JustBrowse and supported upstream extension IDs.
 
----
+See [the architecture note](docs/JUSTBROWSE_ARCHITECTURE.md),
+[the screenshot contract](docs/SCREENSHOTS.md), and
+[the upstream PR audit](docs/UPSTREAM_PR_AUDIT.md) for implementation details.
 
-## 🎯 What is Chrome MCP Server?
+> [!IMPORTANT]
+> Session isolation currently applies within one connected extension/native-host
+> process. Simultaneous routing across multiple Chrome profiles still requires the
+> broker refactor described in the architecture note. Recorded flows also need
+> end-to-end session propagation before they should be treated as isolated.
 
-Chrome MCP Server is a Chrome extension-based **Model Context Protocol (MCP) server** that exposes your Chrome browser functionality to AI assistants like Claude, enabling complex browser automation, content analysis, and semantic search. Unlike traditional browser automation tools (like Playwright), **Chrome MCP Server** directly uses your daily Chrome browser, leveraging existing user habits, configurations, and login states, allowing various large models or chatbots to take control of your browser and truly become your everyday assistant.
+## Requirements
 
-## ✨ New Features(2025/12/30)
+- Node.js 20.19 or newer (or Node.js 22.12 or newer)
+- pnpm 8 (the commands below pin `8.15.9` through Corepack)
+- Chrome or Chromium with Developer mode available
 
-- **A New Visual Editor for Claude Code & Codex**, for more detail here: [VisualEditor](docs/VisualEditor.md)
+## Build and install from this repository
 
-## ✨ Core Features
-
-- 😁 **Chatbot/Model Agnostic**: Let any LLM or chatbot client or agent you prefer automate your browser
-- ⭐️ **Use Your Original Browser**: Seamlessly integrate with your existing browser environment (your configurations, login states, etc.)
-- 💻 **Fully Local**: Pure local MCP server ensuring user privacy
-- 🚄 **Streamable HTTP**: Streamable HTTP connection method
-- 🏎 **Cross-Tab**: Cross-tab context
-- 🧠 **Semantic Search**: Built-in vector database for intelligent browser tab content discovery
-- 🔍 **Smart Content Analysis**: AI-powered text extraction and similarity matching
-- 🌐 **20+ Tools**: Support for screenshots, network monitoring, interactive operations, bookmark management, browsing history, and 20+ other tools
-- 🚀 **SIMD-Accelerated AI**: Custom WebAssembly SIMD optimization for 4-8x faster vector operations
-
-## 🆚 Comparison with Similar Projects
-
-| Comparison Dimension    | Playwright-based MCP Server                                                                                               | Chrome Extension-based MCP Server                                                                      |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| **Resource Usage**      | ❌ Requires launching independent browser process, installing Playwright dependencies, downloading browser binaries, etc. | ✅ No need to launch independent browser process, directly utilizes user's already open Chrome browser |
-| **User Session Reuse**  | ❌ Requires re-login                                                                                                      | ✅ Automatically uses existing login state                                                             |
-| **Browser Environment** | ❌ Clean environment lacks user settings                                                                                  | ✅ Fully preserves user environment                                                                    |
-| **API Access**          | ⚠️ Limited to Playwright API                                                                                              | ✅ Full access to Chrome native APIs                                                                   |
-| **Startup Speed**       | ❌ Requires launching browser process                                                                                     | ✅ Only needs to activate extension                                                                    |
-| **Response Speed**      | 50-200ms inter-process communication                                                                                      | ✅ Faster                                                                                              |
-
-## 🚀 Quick Start
-
-### Prerequisites
-
-- Node.js >= 20.0.0 and pnpm/npm
-- Chrome/Chromium browser
-
-### Installation Steps
-
-1. **Download the latest Chrome extension from GitHub**
-
-Download link: https://github.com/hangwin/mcp-chrome/releases
-
-2. **Install mcp-chrome-bridge globally**
-
-npm
-
-```bash
-npm install -g mcp-chrome-bridge
+```powershell
+git clone https://github.com/JustSuperHuman/mcp-chrome-but-good.git
+cd mcp-chrome-but-good
+corepack pnpm@8.15.9 install --frozen-lockfile
+corepack pnpm@8.15.9 build:shared
+corepack pnpm@8.15.9 build:native
+corepack pnpm@8.15.9 build:extension
+corepack pnpm@8.15.9 --filter mcp-chrome-bridge register:dev
 ```
 
-pnpm
+Then:
 
-```bash
-# Method 1: Enable scripts globally (recommended)
-pnpm config set enable-pre-post-scripts true
-pnpm install -g mcp-chrome-bridge
+1. Open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Choose **Load unpacked** and select
+   `app/chrome-extension/.output/chrome-mv3` from this checkout.
+4. Open the JustBrowseMCP extension and click **Connect**.
+5. Confirm the bridge and extension are healthy:
 
-# Method 2: Manual registration (if postinstall doesn't run)
-pnpm install -g mcp-chrome-bridge
-mcp-chrome-bridge register
+```powershell
+Invoke-RestMethod http://127.0.0.1:12306/ping
 ```
 
-> Note: pnpm v7+ disables postinstall scripts by default for security. The `enable-pre-post-scripts` setting controls whether pre/post install scripts run. If automatic registration fails, use the manual registration command above.
+A healthy response includes `extensionConnected: true`. The endpoint returns HTTP
+503 when the native host is running without a live extension connection.
 
-3. **Load Chrome Extension**
-   - Open Chrome and go to `chrome://extensions/`
-   - Enable "Developer mode"
-   - Click "Load unpacked" and select `your/dowloaded/extension/folder`
-   - Click the extension icon to open the plugin, then click connect to see the MCP configuration
-     <img width="475" alt="Screenshot 2025-06-09 15 52 06" src="https://github.com/user-attachments/assets/241e57b8-c55f-41a4-9188-0367293dc5bc" />
+Re-run the build and `register:dev` commands after moving the checkout because the
+native-messaging manifest contains an absolute host path.
 
-### Usage with MCP Protocol Clients
+## Connect an MCP client
 
-#### Using Streamable HTTP Connection (👍🏻 Recommended)
-
-Add the following configuration to your MCP client configuration (using CherryStudio as an example):
-
-> Streamable HTTP connection method is recommended
+Streamable HTTP is the preferred transport:
 
 ```json
 {
   "mcpServers": {
-    "chrome-mcp-server": {
+    "justbrowse": {
       "type": "streamableHttp",
       "url": "http://127.0.0.1:12306/mcp"
     }
@@ -106,200 +89,112 @@ Add the following configuration to your MCP client configuration (using CherrySt
 }
 ```
 
-#### Using STDIO Connection (Alternative)
-
-If your client only supports stdio connection method, please use the following approach:
-
-1. First, check the installation location of the npm package you just installed
-
-```sh
-# npm check method
-npm list -g mcp-chrome-bridge
-# pnpm check method
-pnpm list -g mcp-chrome-bridge
-```
-
-Assuming the command above outputs the path: /Users/xxx/Library/pnpm/global/5
-Then your final path would be: /Users/xxx/Library/pnpm/global/5/node_modules/mcp-chrome-bridge/dist/mcp/mcp-server-stdio.js
-
-2. Replace the configuration below with the final path you just obtained
+For clients that only support stdio, point the client at the built proxy:
 
 ```json
 {
   "mcpServers": {
-    "chrome-mcp-stdio": {
-      "command": "npx",
+    "justbrowse": {
+      "command": "node",
       "args": [
-        "node",
-        "/Users/xxx/Library/pnpm/global/5/node_modules/mcp-chrome-bridge/dist/mcp/mcp-server-stdio.js"
+        "C:/absolute/path/to/mcp-chrome-but-good/app/native-server/dist/mcp/mcp-server-stdio.js"
       ]
     }
   }
 }
 ```
 
-eg：config in augment:
+The stdio proxy connects to the same local HTTP endpoint configured in
+`app/native-server/dist/mcp/stdio-config.json`.
 
-<img width="494" alt="截屏2025-06-22 22 11 25" src="https://github.com/user-attachments/assets/48eefc0c-a257-4d3b-8bbe-d7ff716de2bf" />
+## Install the agent skill
 
-## 🛠️ Available Tools
+The repository includes a client-neutral skill at
+[`skills/justbrowse-browser/SKILL.md`](skills/justbrowse-browser/SKILL.md). Copy the
+whole `justbrowse-browser` directory into your agent's skill directory, for example:
 
-Complete tool list: [Complete Tool List](docs/TOOLS.md)
+```powershell
+Copy-Item -Recurse skills\justbrowse-browser "$env:USERPROFILE\.codex\skills\justbrowse-browser"
+# or
+Copy-Item -Recurse skills\justbrowse-browser "$env:USERPROFILE\.claude\skills\justbrowse-browser"
+```
 
-<details>
-<summary><strong>📊 Browser Management (6 tools)</strong></summary>
+The skill teaches an agent to preserve session ownership and browser focus, use
+direct MCP screenshot images, verify important UI outcomes, and clean up disposable
+tabs. The tracked copy is the source of truth; update installed copies after pulling
+changes.
 
-- `get_windows_and_tabs` - List all browser windows and tabs
-- `chrome_navigate` - Navigate to URLs and control viewport
-- `chrome_switch_tab` - Switch the current active tab
-- `chrome_close_tabs` - Close specific tabs or windows
-- `chrome_go_back_or_forward` - Browser navigation control
-- `chrome_inject_script` - Inject content scripts into web pages
-- `chrome_send_command_to_inject_script` - Send commands to injected content scripts
-</details>
+## Runtime behavior
 
-<details>
-<summary><strong>📸 Screenshots & Visual (1 tool)</strong></summary>
+An isolated session normally starts with `chrome_navigate`. The new tab is created
+in the background, leased to that MCP connection, and becomes the connection's
+logical active tab. Subsequent tab-scoped calls use that lease when `tabId` is
+omitted. `get_windows_and_tabs` shows only the current connection's leased tabs.
 
-- `chrome_screenshot` - Advanced screenshot capture with element targeting, full-page support, and custom dimensions
-</details>
+An agent may explicitly select an unowned existing tab by ID. The tab is atomically
+claimed for that session before any operation runs; another session cannot claim or
+operate on it until ownership is released. `chrome_switch_tab` changes only the
+logical active tab in isolated sessions and never changes visible Chrome focus.
 
-<details>
-<summary><strong>🌐 Network Monitoring (4 tools)</strong></summary>
+Viewport, full-page, and CSS-selected element screenshots use Chrome DevTools
+Protocol capture without activating the target tab. A successful result contains an
+MCP `image` block followed by compact JSON metadata. PNG is preserved when it fits
+the native-message envelope; oversized results are converted or scaled and report
+their actual MIME type and dimensions.
 
-- `chrome_network_capture_start/stop` - webRequest API network capture
-- `chrome_network_debugger_start/stop` - Debugger API with response bodies
-- `chrome_network_request` - Send custom HTTP requests
-</details>
+## Configuration
 
-<details>
-<summary><strong>🔍 Content Analysis (4 tools)</strong></summary>
+| Variable                     | Purpose                                                       | Default       |
+| ---------------------------- | ------------------------------------------------------------- | ------------- |
+| `CHROME_MCP_PORT`            | Native host and MCP listener port                             | `12306`       |
+| `MCP_HTTP_PORT`              | Backward-compatible port override                             | `12306`       |
+| `CHROME_MCP_HOST`            | Host used in MCP URLs passed to the built-in agent engines    | `127.0.0.1`   |
+| `CHROME_MCP_SESSION_IDLE_MS` | Streamable HTTP session idle timeout in milliseconds          | `1800000`     |
+| `CHROME_MCP_NODE_PATH`       | Absolute Node executable override for the native-host wrapper | auto-detected |
 
-- `search_tabs_content` - AI-powered semantic search across browser tabs
-- `chrome_get_web_content` - Extract HTML/text content from pages
-- `chrome_get_interactive_elements` - Find clickable elements
-- `chrome_console` - Capture and retrieve console output from browser tabs
-</details>
+## Verification
 
-<details>
-<summary><strong>🎯 Interaction (3 tools)</strong></summary>
+Run the focused isolation checks, native-server typecheck, and production builds:
 
-- `chrome_click_element` - Click elements using CSS selectors
-- `chrome_fill_or_select` - Fill forms and select options
-- `chrome_keyboard` - Simulate keyboard input and shortcuts
-</details>
+```powershell
+corepack pnpm@8.15.9 --filter chrome-mcp-server exec vitest run tests/browser-session-manager.test.ts tests/background-screenshot.test.ts tests/cdp-session-manager.test.ts tests/move-tab.test.ts tests/network-request-targeting.test.ts
+corepack pnpm@8.15.9 --dir app/native-server exec jest --coverage=false --runInBand src/server/server.test.ts src/mcp/mcp-server.test.ts
+corepack pnpm@8.15.9 --filter mcp-chrome-bridge exec tsc --noEmit
+corepack pnpm@8.15.9 build:shared
+corepack pnpm@8.15.9 build:native
+corepack pnpm@8.15.9 build:extension
+```
 
-<details>
-<summary><strong>📚 Data Management (5 tools)</strong></summary>
+The wider inherited extension suite currently includes upstream record/replay tests
+that require Sharp 0.32's native binary and an extension-wide Vue typecheck with
+pre-existing UI/type-contract failures. Those are not used as release gates for
+this focused fork branch.
 
-- `chrome_history` - Search browser history with time filters
-- `chrome_bookmark_search` - Find bookmarks by keywords
-- `chrome_bookmark_add` - Add new bookmarks with folder support
-- `chrome_bookmark_delete` - Delete bookmarks
-</details>
+With the built extension connected, the live smoke scripts exercise no-focus
+screenshots, tab moves, and targeted network requests:
 
-## 🧪 Usage Examples
+```powershell
+node scripts/live-screenshot-smoke.mjs
+node scripts/live-pr-integration-smoke.mjs
+```
 
-### AI helps you summarize webpage content and automatically control Excalidraw for drawing
+`scripts/concurrent-screenshot-worker.mjs` is the lower-level multi-process helper
+used to exercise simultaneous sessions; it requires per-worker
+`JUSTBROWSE_TEST_LABEL` and `JUSTBROWSE_TEST_URL` values plus a shared barrier
+directory. Live artifacts are written under the ignored `live-test-output/`
+directory.
 
-prompt: [excalidraw-prompt](prompt/excalidraw-prompt.md)
-Instruction: Help me summarize the current page content, then draw a diagram to aid my understanding.
-https://www.youtube.com/watch?v=3fBPdUBWVz0
+## Security and privacy
 
-https://github.com/user-attachments/assets/fd17209b-303d-48db-9e5e-3717141df183
+Browser control runs locally and reuses the selected Chrome profile's cookies and
+login state. Treat the MCP endpoint as privileged local access: do not expose port
+12306 to an untrusted network. The private `__justBrowse` routing envelope is added
+by the native host and is deliberately absent from public tool schemas so an MCP
+caller cannot choose another connection's identity.
 
-### After analyzing the content of the image, the LLM automatically controls Excalidraw to replicate the image
+## Upstream and license
 
-prompt: [excalidraw-prompt](prompt/excalidraw-prompt.md)|[content-analize](prompt/content-analize.md)
-Instruction: First, analyze the content of the image, and then replicate the image by combining the analysis with the content of the image.
-https://www.youtube.com/watch?v=tEPdHZBzbZk
-
-https://github.com/user-attachments/assets/60d12b1a-9b74-40f4-994c-95e8fa1fc8d3
-
-### AI automatically injects scripts and modifies webpage styles
-
-prompt: [modify-web-prompt](prompt/modify-web.md)
-Instruction: Help me modify the current page's style and remove advertisements.
-https://youtu.be/twI6apRKHsk
-
-https://github.com/user-attachments/assets/69cb561c-2e1e-4665-9411-4a3185f9643e
-
-### AI automatically captures network requests for you
-
-query: I want to know what the search API for Xiaohongshu is and what the response structure looks like
-
-https://youtu.be/1hHKr7XKqnQ
-
-https://github.com/user-attachments/assets/dc7e5cab-b9af-4b9a-97ce-18e4837318d9
-
-### AI helps analyze your browsing history
-
-query: Analyze my browsing history from the past month
-
-https://youtu.be/jf2UZfrR2Vk
-
-https://github.com/user-attachments/assets/31b2e064-88c6-4adb-96d7-50748b826eae
-
-### Web page conversation
-
-query: Translate and summarize the current web page
-https://youtu.be/FlJKS9UQyC8
-
-https://github.com/user-attachments/assets/aa8ef2a1-2310-47e6-897a-769d85489396
-
-### AI automatically takes screenshots for you (web page screenshots)
-
-query: Take a screenshot of Hugging Face's homepage
-https://youtu.be/7ycK6iksWi4
-
-https://github.com/user-attachments/assets/65c6eee2-6366-493d-a3bd-2b27529ff5b3
-
-### AI automatically takes screenshots for you (element screenshots)
-
-query: Capture the icon from Hugging Face's homepage
-https://youtu.be/ev8VivANIrk
-
-https://github.com/user-attachments/assets/d0cf9785-c2fe-4729-a3c5-7f2b8b96fe0c
-
-### AI helps manage bookmarks
-
-query: Add the current page to bookmarks and put it in an appropriate folder
-
-https://youtu.be/R_83arKmFTo
-
-https://github.com/user-attachments/assets/15a7d04c-0196-4b40-84c2-bafb5c26dfe0
-
-### Automatically close web pages
-
-query: Close all shadcn-related web pages
-
-https://youtu.be/2wzUT6eNVg4
-
-https://github.com/user-attachments/assets/83de4008-bb7e-494d-9b0f-98325cfea592
-
-## 🤝 Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](docs/CONTRIBUTING.md) for detailed guidelines.
-
-## 🚧 Future Roadmap
-
-We have exciting plans for the future development of Chrome MCP Server:
-
-- [ ] Authentication
-- [ ] Recording and Playback
-- [ ] Workflow Automation
-- [ ] Enhanced Browser Support (Firefox Extension)
-
----
-
-**Want to contribute to any of these features?** Check out our [Contributing Guide](docs/CONTRIBUTING.md) and join our development community!
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 📚 More Documentation
-
-- [Architecture Design](docs/ARCHITECTURE.md) - Detailed technical architecture documentation
-- [TOOLS API](docs/TOOLS.md) - Complete tool API documentation
-- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issue solutions
+JustBrowseMCP is based on
+[`hangwin/mcp-chrome`](https://github.com/hangwin/mcp-chrome). The fork audits and
+adapts upstream work while keeping isolation and no-focus invariants explicit. It is
+licensed under the [MIT License](LICENSE).

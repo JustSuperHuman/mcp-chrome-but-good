@@ -16,6 +16,7 @@ interface NavigateToolParams {
   tabId?: number;
   windowId?: number;
   background?: boolean; // when true, do not activate tab or focus window
+  reuseExisting?: boolean; // internal: isolated sessions must not adopt a matching user tab
 }
 
 /**
@@ -48,6 +49,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
       tabId,
       background,
       windowId,
+      reuseExisting = true,
     } = args;
 
     console.log(
@@ -151,6 +153,10 @@ class NavigateTool extends BaseBrowserToolExecutor {
         try {
           if (!input.includes('*')) {
             const u = new URL(input);
+            if (u.protocol === 'file:') {
+              patterns.add(input);
+              return Array.from(patterns);
+            }
             // Use host-level wildcard to include all paths; we'll do precise selection later
             const pathWildcard = '/*';
 
@@ -180,7 +186,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
       };
 
       const urlPatterns = buildUrlPatterns(url);
-      const candidateTabs = await chrome.tabs.query({ url: urlPatterns });
+      const candidateTabs = reuseExisting ? await chrome.tabs.query({ url: urlPatterns }) : [];
       console.log(`Found ${candidateTabs.length} matching tabs with patterns:`, urlPatterns);
 
       // Prefer strict match when user specifies a concrete path/query.
@@ -389,7 +395,7 @@ class NavigateTool extends BaseBrowserToolExecutor {
             url: url,
             width: DEFAULT_WINDOW_WIDTH,
             height: DEFAULT_WINDOW_HEIGHT,
-            focused: true,
+            focused: background !== true,
           });
 
           if (fallbackWindow && fallbackWindow.id !== undefined) {
@@ -469,9 +475,11 @@ class CloseTabsTool extends BaseBrowserToolExecutor {
             // Use URL to normalize; fallback to simple suffixing when parsing fails.
             try {
               const u = new URL(urlPattern);
-              const basePath = u.pathname || '/';
-              const pathWithWildcard = basePath.endsWith('/') ? `${basePath}*` : `${basePath}/*`;
-              urlPattern = `${u.protocol}//${u.host}${pathWithWildcard}`;
+              if (u.protocol !== 'file:') {
+                const basePath = u.pathname || '/';
+                const pathWithWildcard = basePath.endsWith('/') ? `${basePath}*` : `${basePath}/*`;
+                urlPattern = `${u.protocol}//${u.host}${pathWithWildcard}`;
+              }
             } catch {
               // Not a fully-qualified URL; ensure it ends with wildcard
               urlPattern = urlPattern.endsWith('/') ? `${urlPattern}*` : `${urlPattern}/*`;

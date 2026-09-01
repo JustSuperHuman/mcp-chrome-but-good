@@ -8,6 +8,7 @@ export const TOOL_NAMES = {
     SCREENSHOT: 'chrome_screenshot',
     CLOSE_TABS: 'chrome_close_tabs',
     SWITCH_TAB: 'chrome_switch_tab',
+    MOVE_TAB: 'chrome_move_tab',
     WEB_FETCHER: 'chrome_get_web_content',
     CLICK: 'chrome_click_element',
     FILL: 'chrome_fill_or_select',
@@ -447,7 +448,7 @@ export const TOOL_SCHEMAS: Tool[] = [
   {
     name: TOOL_NAMES.BROWSER.SCREENSHOT,
     description:
-      '[Prefer read_page over taking a screenshot and Prefer chrome_computer] Take a screenshot of the current page or a specific element. For new usage, use chrome_computer with action="screenshot". Use this tool if you need advanced options.',
+      'Capture a viewport, full page, or CSS-selected element. Returns a directly viewable MCP image by default. In JustBrowse sessions the resolved tab is captured through CDP without activating the tab or focusing its window.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -464,23 +465,26 @@ export const TOOL_SCHEMAS: Tool[] = [
         background: {
           type: 'boolean',
           description:
-            'Attempt capture without bringing tab/window to foreground. CDP-based capture is used for simple viewport captures. For element/full-page capture, the tab may still be made active in its window without focusing the window. Default: false',
+            'Capture through CDP without activating the tab or focusing its window. Supports viewport, element, and full-page capture. Defaults to true in JustBrowse sessions.',
         },
         width: { type: 'number', description: 'Width in pixels (default: 800)' },
         height: { type: 'number', description: 'Height in pixels (default: 600)' },
         storeBase64: {
           type: 'boolean',
           description:
-            'return screenshot in base64 format (default: false) if you want to see the page, recommend set this to be true',
+            'Return the screenshot as a directly viewable MCP image content block (default: true).',
         },
         fullPage: {
           type: 'boolean',
-          description: 'Store screenshot of the entire page (default: true)',
+          description: 'Capture the entire document rather than the viewport (default: false).',
         },
         savePng: {
           type: 'boolean',
-          description:
-            'Save screenshot as PNG file (default: true)，if you want to see the page, recommend set this to be false, and set storeBase64 to be true',
+          description: 'Also save the PNG through Chrome downloads (default: false).',
+        },
+        maxHeight: {
+          type: 'number',
+          description: 'Maximum full-page capture height in CSS pixels (default: 50000).',
         },
       },
       required: [],
@@ -518,6 +522,34 @@ export const TOOL_SCHEMAS: Tool[] = [
         windowId: {
           type: 'number',
           description: 'The ID of the window where the tab is located.',
+        },
+      },
+      required: ['tabId'],
+    },
+  },
+  {
+    name: TOOL_NAMES.BROWSER.MOVE_TAB,
+    description:
+      'Move an existing owned tab to another window, or detach it into a new window, without reloading the page or losing page state.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: { type: 'number', description: 'The owned tab ID to move.' },
+        windowId: {
+          type: 'number',
+          description: 'Destination window ID. Mutually exclusive with newWindow.',
+        },
+        newWindow: {
+          type: 'boolean',
+          description: 'Detach the tab into a new window instead of using windowId.',
+        },
+        index: {
+          type: 'number',
+          description: 'Position in the destination window; negative values append.',
+        },
+        focused: {
+          type: 'boolean',
+          description: 'Focus the destination window after moving (default: false).',
         },
       },
       required: ['tabId'],
@@ -563,7 +595,8 @@ export const TOOL_SCHEMAS: Tool[] = [
   },
   {
     name: TOOL_NAMES.BROWSER.NETWORK_REQUEST,
-    description: 'Send a network request from the browser with cookies and other browser context',
+    description:
+      'Send a network request from a selected browser tab with its cookies and browser context. Pass tabId to use the current JustBrowse session tab without changing browser focus.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -591,6 +624,23 @@ export const TOOL_SCHEMAS: Tool[] = [
           type: 'object',
           description:
             'Multipart/form-data descriptor. If provided, overrides body and builds FormData with optional file attachments. Shape: { fields?: Record<string,string|number|boolean>, files?: Array<{ name: string, fileUrl?: string, filePath?: string, base64Data?: string, filename?: string, contentType?: string }> }. Also supports a compact array form: [ [name, fileSpec, filename?], ... ] where fileSpec may be url:, file:, or base64:.',
+        },
+        tabId: {
+          type: 'number',
+          description: 'Target an existing tab by ID. Preferred for isolated JustBrowse sessions.',
+        },
+        tabUrl: {
+          type: 'string',
+          description:
+            'Find a tab with this exact URL, or create it if missing. Direct extension callers only; isolated sessions use their owned tabId.',
+        },
+        windowId: {
+          type: 'number',
+          description: 'Restrict active-tab lookup or new-tab creation to this window.',
+        },
+        background: {
+          type: 'boolean',
+          description: 'Keep a newly created target tab inactive (default: true).',
         },
       },
       required: ['url'],

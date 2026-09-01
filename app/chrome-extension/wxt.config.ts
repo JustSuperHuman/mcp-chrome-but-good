@@ -2,7 +2,8 @@ import { defineConfig } from 'wxt';
 import tailwindcss from '@tailwindcss/vite';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 import { config } from 'dotenv';
-import { resolve } from 'path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative, resolve, sep } from 'node:path';
 import Icons from 'unplugin-icons/vite';
 import Components from 'unplugin-vue-components/vite';
 import IconsResolver from 'unplugin-icons/resolver';
@@ -13,6 +14,41 @@ config({ path: resolve(process.cwd(), '.env.local') });
 const CHROME_EXTENSION_KEY = process.env.CHROME_EXTENSION_KEY;
 // Detect dev mode early for manifest-level switches
 const IS_DEV = process.env.NODE_ENV !== 'production' && process.env.MODE !== 'production';
+let staticAssetsEmitted = false;
+
+function stableStaticAssets() {
+  const roots = [
+    { source: resolve('inject-scripts'), output: 'inject-scripts' },
+    { source: resolve('workers'), output: 'workers' },
+    { source: resolve('_locales'), output: '_locales' },
+  ];
+  const filesIn = (directory: string): string[] =>
+    readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      const path = join(directory, entry.name);
+      return entry.isDirectory() ? filesIn(path) : [path];
+    });
+
+  return {
+    name: 'justbrowse-stable-static-assets',
+    apply: 'build',
+    generateBundle() {
+      // WXT invokes the Vite config for several extension entrypoint bundles.
+      // They share one output directory, so emit the common assets once.
+      if (staticAssetsEmitted) return;
+      staticAssetsEmitted = true;
+      for (const root of roots) {
+        for (const path of filesIn(root.source)) {
+          const suffix = relative(root.source, path).split(sep).join('/');
+          this.emitFile({
+            type: 'asset',
+            fileName: `${root.output}/${suffix}`,
+            source: readFileSync(path),
+          });
+        }
+      }
+    },
+  };
+}
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
@@ -40,6 +76,7 @@ export default defineConfig({
     permissions: [
       'nativeMessaging',
       'tabs',
+      'tabGroups',
       'activeTab',
       'scripting',
       'contextMenus',
@@ -131,31 +168,18 @@ export default defineConfig({
         resolvers: [IconsResolver({ prefix: 'i', enabledCollections: ['lucide', 'mdi', 'ri'] })],
       }) as any,
       Icons({ compiler: 'vue3', autoInstall: false }) as any,
-      // Ensure static assets are available as early as possible to avoid race conditions in dev
-      // Copy workers/_locales/inject-scripts into the build output before other steps
-      viteStaticCopy({
-        targets: [
-          {
-            src: 'inject-scripts/*.js',
-            dest: 'inject-scripts',
-          },
-          {
-            src: ['workers/*'],
-            dest: 'workers',
-          },
-          {
-            src: '_locales/**/*',
-            dest: '_locales',
-          },
-        ],
-        // Use writeBundle so outDir exists for dev and prod
-        hook: 'writeBundle',
-        // Enable watch so changes to these files are reflected during dev
-        watch: {
-          // Use default patterns inferred from targets; explicit true enables watching
-          // Vite plugin will watch src patterns and re-copy on change
-        } as any,
-      }) as any,
+      // Production assets are Rollup outputs, so WXT cannot enumerate a
+      // half-copied directory. Keep the static-copy middleware for dev serving.
+      ...(env.command === 'build'
+        ? [stableStaticAssets()]
+        : (viteStaticCopy({
+            targets: [
+              { src: 'inject-scripts/*.js', dest: 'inject-scripts' },
+              { src: ['workers/*'], dest: 'workers' },
+              { src: '_locales/**/*', dest: '_locales' },
+            ],
+            watch: {} as any,
+          }) as any)),
     ],
     build: {
       // 我们的构建产物需要兼容到es6

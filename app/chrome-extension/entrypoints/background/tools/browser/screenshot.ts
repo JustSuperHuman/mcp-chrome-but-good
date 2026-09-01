@@ -19,6 +19,7 @@ const SCREENSHOT_CONSTANTS = {
   MAX_CAPTURE_HEIGHT_PX: 50000, // Maximum height in pixels to capture
   PIXEL_TOLERANCE: 1,
   SCRIPT_INIT_DELAY: 100, // Delay for script initialization
+  MAX_MCP_BASE64_CHARS: 8 * 1024 * 1024, // stay comfortably below MCP/native envelopes
 } as {
   readonly SCROLL_DELAY_MS: number;
   CAPTURE_STITCH_DELAY_MS: number; // This one is mutable
@@ -26,6 +27,7 @@ const SCREENSHOT_CONSTANTS = {
   readonly MAX_CAPTURE_HEIGHT_PX: number;
   readonly PIXEL_TOLERANCE: number;
   readonly SCRIPT_INIT_DELAY: number;
+  readonly MAX_MCP_BASE64_CHARS: number;
 };
 
 // Adjust CAPTURE_STITCH_DELAY_MS to respect Chrome's capture rate if available in runtime
@@ -44,7 +46,7 @@ if (typeof __MAX_CAP_RATE === 'number' && __MAX_CAP_RATE > 0) {
 }
 
 interface ScreenshotToolParams {
-  name: string;
+  name?: string;
   selector?: string;
   tabId?: number;
   background?: boolean;
@@ -55,6 +57,24 @@ interface ScreenshotToolParams {
   fullPage?: boolean;
   savePng?: boolean;
   maxHeight?: number; // Maximum height to capture in pixels (for infinite scroll pages)
+}
+
+interface CapturedScreenshot {
+  dataUrl: string;
+  widthCss: number;
+  heightCss: number;
+  viewportWidthCss: number;
+  viewportHeightCss: number;
+  devicePixelRatio: number;
+  mode: 'viewport' | 'fullPage' | 'element';
+}
+
+interface DeliverableImage {
+  base64Data: string;
+  mimeType: 'image/png' | 'image/jpeg';
+  width: number;
+  height: number;
+  transportCompressed: boolean;
 }
 
 /** Page details returned by screenshot-helper content script */
@@ -115,9 +135,9 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     const {
       name = 'screenshot',
       selector,
-      storeBase64 = false,
+      storeBase64 = true,
       fullPage = false,
-      savePng = true,
+      savePng = false,
     } = args;
 
     console.log(`Starting screenshot with options:`, args);
@@ -141,51 +161,50 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
     let finalImageDataUrl: string | undefined;
     let finalImageWidthCss: number | undefined;
     let finalImageHeightCss: number | undefined;
-    const results: any = { base64: null, fileSaved: false };
+    let finalImageWidthPx: number | undefined;
+    let finalImageHeightPx: number | undefined;
+    let deliverableImage: DeliverableImage | undefined;
+    const results: any = { fileSaved: false };
     let originalScroll: { x: number; y: number } | null = null;
     let didPreparePage = false;
     let pageDetails: ScreenshotPageDetails | undefined;
+    let captureMode: CapturedScreenshot['mode'] = selector
+      ? 'element'
+      : fullPage
+        ? 'fullPage'
+        : 'viewport';
 
     try {
       const background = args.background === true;
-      // CDP path: background=true with simple viewport capture (no fullPage, no selector)
-      const canUseCdpCapture = background && !fullPage && !selector;
-
-      // === Path 1: CDP viewport capture (no content script needed) ===
-      if (canUseCdpCapture) {
+      // Background capture is strict: every mode uses CDP against the resolved tab.
+      // Never fall back to captureVisibleTab here because it captures Chrome's
+      // physically active tab and would either return the wrong page or require
+      // stealing focus from the user.
+      if (background) {
         try {
-          const tabId = tab.id!;
-          const { cdpSessionManager } = await import('@/utils/cdp-session-manager');
-          await cdpSessionManager.withSession(tabId, 'screenshot', async () => {
-            const metrics: any = await cdpSessionManager.sendCommand(
-              tabId,
-              'Page.getLayoutMetrics',
-              {},
-            );
-            const viewport = metrics?.layoutViewport ||
-              metrics?.visualViewport || {
-                clientWidth: 800,
-                clientHeight: 600,
-                pageX: 0,
-                pageY: 0,
-              };
-            const shot: any = await cdpSessionManager.sendCommand(tabId, 'Page.captureScreenshot', {
-              format: 'png',
-            });
-            const base64Data = typeof shot?.data === 'string' ? shot.data : '';
-            if (!base64Data) {
-              throw new Error('CDP Page.captureScreenshot returned empty data');
-            }
-            finalImageDataUrl = `data:image/png;base64,${base64Data}`;
-            finalImageWidthCss = Math.round(viewport.clientWidth || 800);
-            finalImageHeightCss = Math.round(viewport.clientHeight || 600);
-          });
+          const captured = await this._captureBackgroundWithCdp(tab.id!, args);
+          finalImageDataUrl = captured.dataUrl;
+          finalImageWidthCss = captured.widthCss;
+          finalImageHeightCss = captured.heightCss;
+          captureMode = captured.mode;
+          pageDetails = {
+            totalWidth: captured.widthCss,
+            totalHeight: captured.heightCss,
+            viewportWidth: captured.viewportWidthCss,
+            viewportHeight: captured.viewportHeightCss,
+            devicePixelRatio: captured.devicePixelRatio,
+            currentScrollX: 0,
+            currentScrollY: 0,
+          };
         } catch (e) {
-          console.warn('CDP viewport capture failed, falling back to helper path:', e);
+          throw new Error(
+            `Background CDP capture failed without changing browser focus: ${e instanceof Error ? e.message : String(e)}`,
+          );
         }
       }
 
-      // === Path 2: Helper-assisted capture (requires content script) ===
+      // Legacy foreground path. Isolated JustBrowse sessions always set
+      // background=true; this remains only for explicit foreground callers.
       if (!finalImageDataUrl) {
         // Always inject helper when we need pageDetails
         await this.injectContentScript(tab.id!, ['inject-scripts/screenshot-helper.js']);
@@ -256,6 +275,15 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
         throw new Error('Failed to capture image data');
       }
 
+      const outputBitmap = await createImageBitmapFromUrl(finalImageDataUrl);
+      finalImageWidthPx = outputBitmap.width;
+      finalImageHeightPx = outputBitmap.height;
+      if (storeBase64) {
+        deliverableImage = await this._prepareDeliverableImage(finalImageDataUrl);
+        finalImageWidthPx = deliverableImage.width;
+        finalImageHeightPx = deliverableImage.height;
+      }
+
       // 2. Process output
       // Update screenshot context for coordinate scaling by tools like chrome_computer
       try {
@@ -270,8 +298,8 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
           const viewportWidth = pageDetails?.viewportWidth ?? finalImageWidthCss;
           const viewportHeight = pageDetails?.viewportHeight ?? finalImageHeightCss;
           screenshotContextManager.setContext(tab.id!, {
-            screenshotWidth: finalImageWidthCss,
-            screenshotHeight: finalImageHeightCss,
+            screenshotWidth: finalImageWidthPx,
+            screenshotHeight: finalImageHeightPx,
             viewportWidth,
             viewportHeight,
             devicePixelRatio: pageDetails?.devicePixelRatio,
@@ -281,28 +309,6 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
       } catch (e) {
         console.warn('Failed to set screenshot context:', e);
       }
-      if (storeBase64 === true) {
-        // Compress image for base64 output to reduce size
-        const compressed = await compressImage(finalImageDataUrl, {
-          scale: 0.7, // Reduce dimensions by 30%
-          quality: 0.8, // 80% quality for good balance
-          format: 'image/jpeg', // JPEG for better compression
-        });
-
-        // Include base64 data in response (without prefix)
-        const base64Data = compressed.dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
-        results.base64 = base64Data;
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({ base64Data, mimeType: compressed.mimeType }),
-            },
-          ],
-          isError: false,
-        };
-      }
-
       if (savePng === true) {
         // Save PNG file to downloads
         this.logInfo('Saving PNG...');
@@ -367,22 +373,392 @@ class ScreenshotTool extends BaseBrowserToolExecutor {
 
     this.logInfo('Screenshot completed!');
 
+    const metadata = {
+      success: true,
+      message: `Screenshot [${name}] captured successfully`,
+      tabId: tab.id,
+      url: tab.url,
+      name,
+      mimeType: deliverableImage?.mimeType ?? 'image/png',
+      captureMode,
+      background: args.background === true,
+      width: finalImageWidthPx,
+      height: finalImageHeightPx,
+      transportCompressed: deliverableImage?.transportCompressed ?? false,
+      ...results,
+    };
+
     return {
       content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            success: true,
-            message: `Screenshot [${name}] captured successfully`,
-            tabId: tab.id,
-            url: tab.url,
-            name: name,
-            ...results,
-          }),
-        },
+        ...(storeBase64
+          ? ([
+              {
+                type: 'image',
+                data: deliverableImage!.base64Data,
+                mimeType: deliverableImage!.mimeType,
+              },
+            ] as const)
+          : []),
+        { type: 'text', text: JSON.stringify(metadata) },
       ],
       isError: false,
     };
+  }
+
+  /**
+   * Keep screenshots within the existing native-messaging envelope while
+   * preserving full resolution whenever possible. Large photographic/full-page
+   * PNGs are converted to progressively smaller high-quality JPEGs; callers are
+   * told the exact returned dimensions and MIME type.
+   */
+  private async _prepareDeliverableImage(dataUrl: string): Promise<DeliverableImage> {
+    const pngBase64 = dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
+    const original = await createImageBitmapFromUrl(dataUrl);
+    if (pngBase64.length <= SCREENSHOT_CONSTANTS.MAX_MCP_BASE64_CHARS) {
+      return {
+        base64Data: pngBase64,
+        mimeType: 'image/png',
+        width: original.width,
+        height: original.height,
+        transportCompressed: false,
+      };
+    }
+
+    const attempts = [
+      { scale: 1, quality: 0.9 },
+      { scale: 0.85, quality: 0.88 },
+      { scale: 0.7, quality: 0.85 },
+      { scale: 0.55, quality: 0.82 },
+    ];
+    for (const attempt of attempts) {
+      const compressed = await compressImage(dataUrl, {
+        ...attempt,
+        format: 'image/jpeg',
+      });
+      const base64Data = compressed.dataUrl.replace(/^data:image\/[^;]+;base64,/, '');
+      if (base64Data.length <= SCREENSHOT_CONSTANTS.MAX_MCP_BASE64_CHARS) {
+        const bitmap = await createImageBitmapFromUrl(compressed.dataUrl);
+        return {
+          base64Data,
+          mimeType: 'image/jpeg',
+          width: bitmap.width,
+          height: bitmap.height,
+          transportCompressed: true,
+        };
+      }
+    }
+
+    throw new Error(
+      'Screenshot is too large for the MCP transport. Use maxHeight or width to request a smaller image.',
+    );
+  }
+
+  /**
+   * Capture any screenshot mode without activating a tab or focusing a window.
+   * Full-page and element modes are CDP-only. Viewport mode has one guarded
+   * captureVisibleTab fallback for a target already active in its exact window.
+   */
+  private async _captureBackgroundWithCdp(
+    tabId: number,
+    options: ScreenshotToolParams,
+  ): Promise<CapturedScreenshot> {
+    const { cdpSessionManager } = await import('@/utils/cdp-session-manager');
+    return await cdpSessionManager.withSession(tabId, 'screenshot', async () => {
+      await cdpSessionManager.sendCommand(tabId, 'Page.enable', {});
+      const metrics: any = await cdpSessionManager.sendCommand(tabId, 'Page.getLayoutMetrics', {});
+      const viewport = metrics?.cssLayoutViewport ||
+        metrics?.layoutViewport ||
+        metrics?.cssVisualViewport ||
+        metrics?.visualViewport || {
+          clientWidth: 800,
+          clientHeight: 600,
+          pageX: 0,
+          pageY: 0,
+        };
+      const viewportWidth = Math.max(1, Number(viewport.clientWidth || 800));
+      const viewportHeight = Math.max(1, Number(viewport.clientHeight || 600));
+      const dprResponse: any = await cdpSessionManager.sendCommand(tabId, 'Runtime.evaluate', {
+        expression: 'window.devicePixelRatio || 1',
+        returnByValue: true,
+      });
+      const devicePixelRatio = Math.max(1, Number(dprResponse?.result?.value || 1));
+
+      let clip: { x: number; y: number; width: number; height: number; scale: number };
+      let mode: CapturedScreenshot['mode'];
+
+      if (options.selector) {
+        mode = 'element';
+        const selectorExpression = JSON.stringify(options.selector);
+        const elementResponse: any = await cdpSessionManager.sendCommand(
+          tabId,
+          'Runtime.evaluate',
+          {
+            expression: `(() => {
+              const element = document.querySelector(${selectorExpression});
+              if (!element) return { error: 'Element not found' };
+              const rect = element.getBoundingClientRect();
+              if (rect.width <= 0 || rect.height <= 0) return { error: 'Element has no visible box' };
+              return {
+                // CDP captureBeyondViewport accepts document-space clips. Do not
+                // scroll here: scrolling can make fixed/sticky overlays cover the
+                // requested element and it unnecessarily mutates an inactive tab.
+                x: rect.left + window.scrollX,
+                y: rect.top + window.scrollY,
+                width: rect.width,
+                height: rect.height
+              };
+            })()`,
+            awaitPromise: true,
+            returnByValue: true,
+          },
+        );
+        if (elementResponse?.exceptionDetails) {
+          throw new Error(elementResponse.exceptionDetails.text || 'Element lookup failed');
+        }
+        const element = elementResponse?.result?.value;
+        if (element?.error) throw new Error(`${element.error}: ${options.selector}`);
+        if (
+          !element ||
+          ![element.x, element.y, element.width, element.height].every(Number.isFinite)
+        ) {
+          throw new Error(`Could not resolve element bounds: ${options.selector}`);
+        }
+        clip = {
+          x: Math.max(0, Number(element.x)),
+          y: Math.max(0, Number(element.y)),
+          width: Math.max(1, Number(element.width)),
+          height: Math.max(1, Number(element.height)),
+          scale: 1,
+        };
+      } else if (options.fullPage) {
+        mode = 'fullPage';
+        const content = metrics?.cssContentSize || metrics?.contentSize || {};
+        const contentWidth = Math.max(viewportWidth, Number(content.width || viewportWidth));
+        const contentHeight = Math.max(viewportHeight, Number(content.height || viewportHeight));
+        clip = {
+          x: Math.max(0, Number(content.x || 0)),
+          y: Math.max(0, Number(content.y || 0)),
+          width: contentWidth,
+          height: Math.min(
+            contentHeight,
+            Math.max(1, options.maxHeight || SCREENSHOT_CONSTANTS.MAX_CAPTURE_HEIGHT_PX),
+          ),
+          scale: 1,
+        };
+      } else {
+        mode = 'viewport';
+        clip = {
+          x: Math.max(0, Number(viewport.pageX || 0)),
+          y: Math.max(0, Number(viewport.pageY || 0)),
+          width: viewportWidth,
+          height: viewportHeight,
+          scale: 1,
+        };
+      }
+
+      let dataUrl: string;
+      try {
+        dataUrl = await this._captureCdpClip(
+          tabId,
+          clip,
+          options.fullPage === true || !!options.selector,
+        );
+      } catch (error) {
+        if (mode !== 'fullPage') throw error;
+        this.logInfo('Single-shot full-page CDP capture failed; retrying with CDP tiles.');
+        dataUrl = await this._captureCdpFullPageTiles(tabId, clip);
+      }
+
+      let widthCss = clip.width;
+      let heightCss = clip.height;
+      if (options.width || options.height) {
+        const image = await createImageBitmapFromUrl(dataUrl);
+        const targetWidth =
+          options.width || Math.round((image.width * options.height!) / image.height);
+        const targetHeight =
+          options.height || Math.round((image.height * options.width!) / image.width);
+        const canvas = new OffscreenCanvas(targetWidth, targetHeight);
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Unable to create screenshot resize canvas');
+        context.drawImage(image, 0, 0, targetWidth, targetHeight);
+        dataUrl = await canvasToDataURL(canvas);
+        widthCss = targetWidth;
+        heightCss = targetHeight;
+      }
+
+      return {
+        dataUrl,
+        widthCss,
+        heightCss,
+        viewportWidthCss: viewportWidth,
+        viewportHeightCss: viewportHeight,
+        devicePixelRatio,
+        mode,
+      };
+    });
+  }
+
+  private async _captureCdpClip(
+    tabId: number,
+    clip: { x: number; y: number; width: number; height: number; scale: number },
+    captureBeyondViewport: boolean,
+  ): Promise<string> {
+    const { cdpSessionManager } = await import('@/utils/cdp-session-manager');
+    const capture = async (fromSurface: boolean) =>
+      await cdpSessionManager.sendCommand(
+        tabId,
+        'Page.captureScreenshot',
+        {
+          format: 'png',
+          fromSurface,
+          captureBeyondViewport,
+          clip,
+        },
+        7_000,
+      );
+
+    let shot: any;
+    try {
+      shot = await capture(true);
+    } catch (surfaceError) {
+      if (captureBeyondViewport) throw surfaceError;
+
+      // Chrome may stop producing compositor frames for an unfocused window.
+      // Wake the page and emulate focus inside DevTools only; neither command
+      // activates the Chrome tab nor focuses its native window.
+      try {
+        await cdpSessionManager.sendCommand(tabId, 'Page.setWebLifecycleState', {
+          state: 'active',
+        });
+        await cdpSessionManager.sendCommand(tabId, 'Emulation.setFocusEmulationEnabled', {
+          enabled: true,
+        });
+        try {
+          shot = await capture(true);
+        } finally {
+          await cdpSessionManager
+            .sendCommand(tabId, 'Emulation.setFocusEmulationEnabled', { enabled: false })
+            .catch(() => {});
+        }
+      } catch {
+        try {
+          return await this._captureVerifiedWindowActiveTab(tabId);
+        } catch {
+          // The target is not safely capturable through captureVisibleTab (for
+          // example, it is inactive within its window). Keep trying CDP-only
+          // fallbacks without activating or focusing it.
+        }
+      }
+
+      if (!shot) {
+        this.logInfo('Surface capture was unavailable; retrying from the rendered view.');
+        try {
+          shot = await capture(false);
+        } catch {
+          this.logInfo('Rendered-view capture was unavailable; retrying through CDP screencast.');
+          return await this._captureCdpScreencastFrame(tabId, clip);
+        }
+      }
+    }
+    const base64Data = typeof shot?.data === 'string' ? shot.data : '';
+    if (!base64Data) throw new Error('CDP Page.captureScreenshot returned empty data');
+    return `data:image/png;base64,${base64Data}`;
+  }
+
+  private async _captureVerifiedWindowActiveTab(tabId: number): Promise<string> {
+    const target = await chrome.tabs.get(tabId);
+    if (!target.active || typeof target.windowId !== 'number') {
+      throw new Error('Target tab is not active in its own window');
+    }
+    const [windowActiveTab] = await chrome.tabs.query({
+      active: true,
+      windowId: target.windowId,
+    });
+    if (windowActiveTab?.id !== tabId) {
+      throw new Error('Window active tab changed before capture');
+    }
+    const dataUrl = await chrome.tabs.captureVisibleTab(target.windowId, { format: 'png' });
+    if (!dataUrl) throw new Error('Verified window capture returned empty data');
+    return dataUrl;
+  }
+
+  private async _captureCdpScreencastFrame(
+    tabId: number,
+    clip: { width: number; height: number },
+  ): Promise<string> {
+    const { cdpSessionManager } = await import('@/utils/cdp-session-manager');
+    let listener:
+      | ((source: chrome.debugger.Debuggee, method: string, params?: object) => void)
+      | undefined;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const frame = new Promise<string>((resolve, reject) => {
+      listener = (source, method, params) => {
+        if (source.tabId !== tabId || method !== 'Page.screencastFrame') return;
+        const payload = params as { data?: unknown; sessionId?: unknown } | undefined;
+        if (typeof payload?.data !== 'string' || payload.data.length === 0) return;
+        if (typeof payload.sessionId === 'number') {
+          void cdpSessionManager
+            .sendCommand(tabId, 'Page.screencastFrameAck', { sessionId: payload.sessionId }, 2_000)
+            .catch(() => {});
+        }
+        resolve(payload.data);
+      };
+      chrome.debugger.onEvent.addListener(listener);
+      timeoutId = setTimeout(
+        () => reject(new Error(`CDP screencast frame for tab ${tabId} timed out after 7000ms`)),
+        7_000,
+      );
+    });
+
+    try {
+      await cdpSessionManager.sendCommand(
+        tabId,
+        'Page.startScreencast',
+        {
+          format: 'png',
+          maxWidth: Math.max(1, Math.ceil(clip.width)),
+          maxHeight: Math.max(1, Math.ceil(clip.height)),
+          everyNthFrame: 1,
+          sendLastFrame: true,
+        },
+        7_000,
+      );
+      const data = await frame;
+      return `data:image/png;base64,${data}`;
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (listener) chrome.debugger.onEvent.removeListener(listener);
+      await cdpSessionManager.sendCommand(tabId, 'Page.stopScreencast', {}, 2_000).catch(() => {});
+    }
+  }
+
+  private async _captureCdpFullPageTiles(
+    tabId: number,
+    fullClip: { x: number; y: number; width: number; height: number; scale: number },
+  ): Promise<string> {
+    const tileHeightCss = 8000;
+    const rawParts: Array<{ dataUrl: string; yCss: number }> = [];
+    for (let y = 0; y < fullClip.height; y += tileHeightCss) {
+      const height = Math.min(tileHeightCss, fullClip.height - y);
+      rawParts.push({
+        dataUrl: await this._captureCdpClip(
+          tabId,
+          { ...fullClip, y: fullClip.y + y, height },
+          true,
+        ),
+        yCss: y,
+      });
+    }
+    if (rawParts.length === 0) throw new Error('Full-page capture produced no tiles');
+    const first = await createImageBitmapFromUrl(rawParts[0].dataUrl);
+    const scale = first.width / fullClip.width;
+    const canvas = await stitchImages(
+      rawParts.map((part) => ({ dataUrl: part.dataUrl, y: Math.round(part.yCss * scale) })),
+      first.width,
+      Math.round(fullClip.height * scale),
+    );
+    return await canvasToDataURL(canvas);
   }
 
   /**

@@ -1,15 +1,22 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { setupTools } from './register-tools';
 
-export let mcpServer: Server | null = null;
+export interface McpConnectionContext {
+  sessionId: string;
+  transport: 'sse' | 'streamable-http' | 'stdio';
+}
 
-export const getMcpServer = () => {
-  if (mcpServer) {
-    return mcpServer;
-  }
-  mcpServer = new Server(
+/**
+ * Create one MCP protocol server per connected transport.
+ *
+ * The MCP SDK Server owns exactly one transport. Sharing a singleton here made
+ * a second Claude/Codex session fail with "Already connected to a transport"
+ * and also left us with no trustworthy connection identity for tab isolation.
+ */
+export const createMcpServer = (context: McpConnectionContext) => {
+  const mcpServer = new Server(
     {
-      name: 'ChromeMcpServer',
+      name: 'JustBrowseMCP',
       version: '1.0.0',
     },
     {
@@ -19,6 +26,6 @@ export const getMcpServer = () => {
     },
   );
 
-  setupTools(mcpServer);
+  setupTools(mcpServer, context);
   return mcpServer;
 };
