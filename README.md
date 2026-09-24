@@ -75,6 +75,31 @@ A healthy response includes `extensionConnected: true`. The endpoint returns HTT
 Re-run the build and `register:dev` commands after moving the checkout because the
 native-messaging manifest contains an absolute host path.
 
+## Update an existing installation
+
+The 2026-09-24 update is extension **1.0.1** with native bridge **1.0.30**. It
+integrates upstream's origin-validation fix and fixes MCP disconnect recursion,
+streamed CORS headers, and session cleanup. See [release notes](releases/README.md).
+
+After building both components, open `chrome://extensions` (or `edge://extensions`)
+and click **Reload** on the existing extension. Keep its unpacked directory at
+`app/chrome-extension/.output/chrome-mv3`; without a manifest key, changing the
+directory can change its extension ID and break native-host authorization. Then
+open the popup and reconnect if needed. Reloading/reconnecting starts the rebuilt
+native host; replacing the extension ZIP alone does not update a running bridge.
+
+Create and check a distributable ZIP with:
+
+```powershell
+corepack pnpm@8.15.9 --filter chrome-mcp-server zip
+corepack pnpm@8.15.9 verify:release
+```
+
+The ZIP is `app/chrome-extension/.output/chrome-mcp-server-1.0.1-chrome.zip`.
+The verification command checks production assets and exercises the compiled
+bridge over real HTTP, including concurrent clients and legacy SSE. Its browser
+connection is a test double; run the live checks below after reloading Chrome.
+
 ## Connect an MCP client
 
 Streamable HTTP is the preferred transport:
@@ -159,7 +184,7 @@ Run the focused isolation checks, native-server typecheck, and production builds
 
 ```powershell
 corepack pnpm@8.15.9 --filter chrome-mcp-server exec vitest run tests/browser-session-manager.test.ts tests/background-screenshot.test.ts tests/cdp-session-manager.test.ts tests/move-tab.test.ts tests/network-request-targeting.test.ts
-corepack pnpm@8.15.9 --dir app/native-server exec jest --coverage=false --runInBand src/server/server.test.ts src/mcp/mcp-server.test.ts
+corepack pnpm@8.15.9 --dir app/native-server exec jest --coverage=false --runInBand src/server/cors.test.ts src/server/server.test.ts src/mcp/mcp-server.test.ts
 corepack pnpm@8.15.9 --filter mcp-chrome-bridge exec tsc --noEmit
 corepack pnpm@8.15.9 build:shared
 corepack pnpm@8.15.9 build:native
@@ -185,6 +210,11 @@ used to exercise simultaneous sessions; it requires per-worker
 directory. Live artifacts are written under the ignored `live-test-output/`
 directory.
 
+Known live limitation: Windows Chromium can time out capturing a tab moved into a
+new unfocused window, even with the guarded viewport fallback. This was reproduced
+on Edge on 2026-09-24. Keep screenshot work in background tabs of an existing
+window; the tool reports the error without activating the user's window.
+
 ## Security and privacy
 
 Browser control runs locally and reuses the selected Chrome profile's cookies and
@@ -192,6 +222,10 @@ login state. Treat the MCP endpoint as privileged local access: do not expose po
 12306 to an untrusted network. The private `__justBrowse` routing envelope is added
 by the native host and is deliberately absent from public tool schemas so an MCP
 caller cannot choose another connection's identity.
+
+Requests carrying an untrusted `Origin` are rejected with HTTP 403 before API
+handlers run. Loopback and extension origins retain CORS access; clients without
+an Origin header continue to work. This check does not authenticate local processes.
 
 ## Upstream and license
 

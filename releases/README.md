@@ -1,62 +1,59 @@
-# Chrome MCP Server Extension - Latest Release
+# JustBrowseMCP 1.0.1 — 2026-09-24
 
-## 🚀 快速安装
+Extension **1.0.1** pairs with native bridge **1.0.30**.
 
-### 1. 下载扩展
+## Changes
 
-下载 [chrome-mcp-server-latest.zip](/releases/chrome-extension/latest/chrome-mcp-server-lastest.zip)
+- Integrated upstream [PR #383](https://github.com/hangwin/mcp-chrome/pull/383):
+  exact host/protocol matching prevents lookalike origins from accessing the bridge.
+- Reject disallowed origins before HTTP handlers execute, including simple requests.
+- Preserve CORS and session headers for browser clients on streamed MCP responses.
+- Fix recursive session close, duplicate cleanup, invalid DELETE session removal,
+  and shutdown with open streams. Keep simultaneous clients independent.
+- Exercise production extension assets and compiled HTTP transports with
+  `corepack pnpm@8.15.9 verify:release` after building shared/native and the extension ZIP.
 
-### 2. 安装步骤
+## Update from this checkout
 
-1. 解压下载的 zip 文件
-2. 打开 Chrome 浏览器
-3. 地址栏输入 `chrome://extensions/`
-4. 开启右上角的"开发者模式"开关
-5. 点击"加载已解压的扩展程序"
-6. 选择解压后的文件夹
+```powershell
+corepack pnpm@8.15.9 install --frozen-lockfile
+corepack pnpm@8.15.9 build:shared
+corepack pnpm@8.15.9 build:native
+corepack pnpm@8.15.9 --filter chrome-mcp-server zip
+corepack pnpm@8.15.9 verify:release
+corepack pnpm@8.15.9 --filter mcp-chrome-bridge register:dev
+```
 
-### 3. 验证安装
+In `chrome://extensions` or `edge://extensions`, **Reload** the existing unpacked
+extension, then open its popup and reconnect if necessary. Keep the installed
+directory unchanged: `app/chrome-extension/.output/chrome-mv3`. A different unpacked
+path can produce a different extension ID that the native host does not authorize.
 
-- 扩展图标应该出现在浏览器工具栏
-- 点击图标打开配置面板
-- 确认扩展状态显示正常
+The native host must restart for the HTTP fixes to become active. Reloading the
+extension disconnects the old native process; reconnecting launches the rebuilt
+bridge. Check `http://127.0.0.1:12306/ping` for `extensionConnected: true` afterward.
 
-## ⚙️ 配置说明
+## Archive
 
-### Native Server 连接
+The build creates `.output/chrome-mcp-server-1.0.1-chrome.zip` under
+`app/chrome-extension`. The repository's
+[latest ZIP](chrome-extension/latest/chrome-mcp-server-lastest.zip) contains the same
+extension; the historical filename is retained for existing links.
+[SHA256SUMS](chrome-extension/latest/SHA256SUMS) records its checksum.
 
-1. 确保 Native Server 正在运行（默认端口 12306）
-2. 在扩展 popup 中输入正确的端口号
-3. 点击"连接"按钮测试连接
+This ZIP contains the extension only. Update the native bridge from the matching
+checkout as well. When replacing an existing unpacked installation, preserve its
+directory and reload it; do not install a second copy at an arbitrary path.
 
-## 🔧 故障排除
+## Validation and known limits
 
-### 常见问题
-
-1. **扩展无法加载**
-
-   - 确保已开启开发者模式
-   - 检查文件夹结构是否完整
-
-2. **无法连接 Native Server**
-
-   - 确认 Native Server 正在运行
-   - 检查端口号是否正确
-   - 查看浏览器控制台错误信息
-
-3. **功能异常**
-   - 刷新页面重试
-   - 重启浏览器
-   - 重新加载扩展
-
-## 📞 技术支持
-
-遇到问题请：
-
-1. 查看浏览器控制台错误信息
-2. 在 GitHub Issues 中搜索相似问题
-3. 提交新的 Issue 并附上详细信息
-
-## ⚠️ 安全提醒
-
-- 此扩展具有较高权限，请确保从可信来源下载
+- 18 focused extension tests and 31 native tests pass; native TypeScript passes.
+- Shared, native, and extension production builds pass. The release checks verify
+  static assets and real HTTP/SSE transport behavior using a test native connection.
+- Live checks against the currently connected Edge extension pass for viewport,
+  full-page, element, and computer screenshots without activating the test tab.
+- The live detach/move check still times out capturing a new unfocused window on
+  Windows. Keep screenshot work in background tabs of an existing window.
+- These live checks precede reloading version 1.0.1. Re-run the live smoke scripts
+  after reload; the new installed runtime has not yet been verified.
+- Multi-profile broker routing and recorded-flow isolation remain future work.

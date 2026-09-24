@@ -36,6 +36,9 @@ tab until this session releases it.
   work, and screenshots.
 - Use `chrome_move_tab` to preserve page state when a tab must move. Keep
   `focused: false` unless visible focus is an explicit user requirement.
+- Keep screenshot tasks in background tabs of an existing window when possible.
+  Windows Chromium may stop producing frames for a newly detached unfocused window;
+  report a capture timeout without activating the user's window.
 - Never operate on, close, or move a tab reported as owned by another session.
 - Close disposable session tabs with `chrome_close_tabs` when the task is complete.
   Do not use URL-wide closing in an isolated session.

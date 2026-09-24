@@ -74,6 +74,15 @@ export class Server {
   }
 
   private async setupPlugins(): Promise<void> {
+    // CORS response headers alone do not prevent simple requests from executing.
+    // Reject untrusted browser origins before any API or MCP handler can run.
+    this.fastify.addHook('onRequest', async (request, reply) => {
+      const origin = request.headers.origin;
+      if (origin !== undefined && !isOriginAllowed(origin, SERVER_CONFIG.CORS_ORIGIN)) {
+        return reply.code(403).send({ error: 'Origin not allowed' });
+      }
+    });
+
     await this.fastify.register(cors, {
       origin: (origin, cb) => {
         // Allow requests with no origin (e.g., curl, server-to-server)
@@ -84,7 +93,17 @@ export class Server {
       },
       methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
       credentials: true,
+      exposedHeaders: ['mcp-session-id', 'mcp-protocol-version'],
     });
+  }
+
+  private handOffResponse(reply: FastifyReply): void {
+    // Raw SDK responses bypass Fastify's send path, including CORS headers.
+    // Copy them without flushing; the transport still owns the status and body.
+    for (const [name, value] of Object.entries(reply.getHeaders())) {
+      if (value !== undefined) reply.raw.setHeader(name, value);
+    }
+    reply.hijack();
   }
 
   private setupRoutes(): void {
@@ -189,22 +208,19 @@ export class Server {
   private setupMcpRoutes(): void {
     // SSE endpoint
     this.fastify.get('/sse', async (_, reply) => {
-      reply.hijack();
+      this.handOffResponse(reply);
       try {
-        reply.raw.writeHead(HTTP_STATUS.OK, {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        });
-
         const transport = new SSEServerTransport('/messages', reply.raw);
         const server = createMcpServer({ sessionId: transport.sessionId, transport: 'sse' });
         this.transportsMap.set(transport.sessionId, transport);
 
-        reply.raw.on('close', () => {
+        let sessionClosed = false;
+        transport.onclose = () => {
+          if (sessionClosed) return;
+          sessionClosed = true;
           this.transportsMap.delete(transport.sessionId);
-          void server.close();
-        });
+          void this.releaseBrowserSession(transport.sessionId, 'sse');
+        };
 
         await server.connect(transport);
 
@@ -231,6 +247,7 @@ export class Server {
           return;
         }
 
+        this.handOffResponse(reply);
         await transport.handlePostMessage(req.raw, reply.raw, req.body);
       } catch (error) {
         if (!reply.sent) {
@@ -265,13 +282,17 @@ export class Server {
           transport: 'streamable-http',
         });
 
+        let sessionClosed = false;
         transport.onclose = () => {
+          if (sessionClosed) return;
+          sessionClosed = true;
           if (transport?.sessionId && this.transportsMap.get(transport.sessionId)) {
             this.transportsMap.delete(transport.sessionId);
           }
           this.clearSessionIdleTimer(newSessionId);
           void this.releaseBrowserSession(newSessionId);
-          void server.close();
+          // The SDK clears the server's transport after this callback returns.
+          // Calling server.close() here would close the same transport recursively.
         };
         await server.connect(transport);
       } else {
@@ -279,7 +300,7 @@ export class Server {
         return;
       }
 
-      reply.hijack();
+      this.handOffResponse(reply);
       try {
         await transport.handleRequest(request.raw, reply.raw, request.body);
       } catch (error) {
@@ -311,7 +332,7 @@ export class Server {
       this.touchStreamableSession(sessionId as string, transport);
       // StreamableHTTPServerTransport owns the raw response, including SSE
       // headers and its lifecycle. Fastify must not write a second response.
-      reply.hijack();
+      this.handOffResponse(reply);
       try {
         await transport.handleRequest(request.raw, reply.raw);
       } catch (error) {
@@ -337,7 +358,7 @@ export class Server {
         return;
       }
 
-      reply.hijack();
+      this.handOffResponse(reply);
       try {
         await transport.handleRequest(request.raw, reply.raw);
         if (!reply.raw.writableEnded) {
@@ -353,10 +374,6 @@ export class Server {
           reply.raw.end();
         }
       }
-
-      this.clearSessionIdleTimer(sessionId as string);
-      this.transportsMap.delete(sessionId as string);
-      void this.releaseBrowserSession(sessionId as string);
     });
   }
 
@@ -381,14 +398,17 @@ export class Server {
     this.sessionIdleTimers.delete(sessionId);
   }
 
-  private async releaseBrowserSession(sessionId: string): Promise<void> {
+  private async releaseBrowserSession(
+    sessionId: string,
+    transport: 'sse' | 'streamable-http' = 'streamable-http',
+  ): Promise<void> {
     if (!this.nativeHost) return;
     try {
       await this.nativeHost.sendRequestToExtensionAndWait(
         {
           name: '__justbrowse_release_session',
           args: {
-            __justBrowse: { sessionId, transport: 'streamable-http' },
+            __justBrowse: { sessionId, transport },
           },
         },
         NativeMessageType.CALL_TOOL,
@@ -436,6 +456,8 @@ export class Server {
     try {
       for (const timer of this.sessionIdleTimers.values()) clearTimeout(timer);
       this.sessionIdleTimers.clear();
+      await Promise.all([...this.transportsMap.values()].map((transport) => transport.close()));
+      this.transportsMap.clear();
       await this.fastify.close();
       closeDb();
       this.isRunning = false;

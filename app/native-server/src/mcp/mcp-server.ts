@@ -17,7 +17,7 @@ export const createMcpServer = (context: McpConnectionContext) => {
   const mcpServer = new Server(
     {
       name: 'JustBrowseMCP',
-      version: '1.0.0',
+      version: require('../../package.json').version,
     },
     {
       capabilities: {

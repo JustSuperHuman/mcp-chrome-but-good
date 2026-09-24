@@ -15,10 +15,16 @@ direct MCP image by default. No base64 decoding step is required by the client.
 - Background capture never calls `tabs.update` or `windows.update`. If Chrome
   cannot render a viewport through CDP, it may use `tabs.captureVisibleTab`
   only after two fresh checks prove that the requested tab is already active
-  in its exact window. This covers detached, unfocused one-tab windows without
+  in its exact window. This attempts detached, unfocused one-tab windows without
   changing the user's active window or tab. Inactive same-window tabs remain
   CDP-only, so the visible working tab can never be substituted silently.
 - If CDP cannot attach, the tool returns a clear error without changing focus.
+
+On Windows Chromium, a newly detached unfocused window may produce no compositor
+frames even through these fallbacks. The live Edge integration check reproduced
+a screencast timeout on 2026-09-24. Viewport, full-page, element, and computer
+screenshots all passed for inactive tabs in the existing window. Prefer that
+layout for screenshot work; detached-window capture is not a guaranteed capability.
 
 The result contains an `image` block followed by JSON metadata:
 

@@ -18,7 +18,60 @@ describe('服务器测试', () => {
   // 关闭服务器
   afterAll(async () => {
     await Server.stop();
+    await Server.getInstance().close();
   });
+
+  test.each(['GET', 'POST', 'DELETE', 'OPTIONS'] as const)(
+    '%s /mcp rejects an untrusted origin before transport handling',
+    async (method) => {
+      const response = await Server.getInstance().inject({
+        method,
+        url: '/mcp',
+        headers: { origin: 'http://127.0.0.1.attacker.example' },
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({ error: 'Origin not allowed' });
+      expect(response.headers['access-control-allow-origin']).toBeUndefined();
+    },
+  );
+
+  test.each(['/ask-extension', '/sse', '/agent/sessions'])(
+    'rejects untrusted simple GET requests to %s before side effects',
+    async (url) => {
+      const response = await Server.getInstance().inject({
+        method: 'GET',
+        url,
+        headers: { origin: 'https://attacker.example' },
+      });
+      expect(response.statusCode).toBe(403);
+    },
+  );
+
+  test.each(['http://127.0.0.1:5173', 'chrome-extension://pafdmkonlckfdodnpmdbpjmnjnjglihe'])(
+    'preserves API access and CORS preflight for %s',
+    async (origin) => {
+      const response = await Server.getInstance().inject({
+        method: 'GET',
+        url: '/ping',
+        headers: { origin },
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.headers['access-control-allow-origin']).toBe(origin);
+      expect(response.headers['access-control-allow-credentials']).toBe('true');
+
+      const preflight = await Server.getInstance().inject({
+        method: 'OPTIONS',
+        url: '/mcp',
+        headers: {
+          origin,
+          'access-control-request-method': 'POST',
+          'access-control-request-headers': 'content-type,mcp-session-id',
+        },
+      });
+      expect(preflight.statusCode).toBe(204);
+      expect(preflight.headers['access-control-allow-origin']).toBe(origin);
+    },
+  );
 
   test('GET /ping reports a disconnected extension instead of a false pong', async () => {
     const response = await supertest(Server.getInstance().server)

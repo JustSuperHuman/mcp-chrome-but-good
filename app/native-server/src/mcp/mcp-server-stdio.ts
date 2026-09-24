@@ -38,7 +38,7 @@ export const getStdioMcpServer = () => {
   stdioMcpServer = new Server(
     {
       name: 'StdioChromeMcpServer',
-      version: '1.0.0',
+      version: require('../../package.json').version,
     },
     {
       capabilities: {

@@ -1,8 +1,36 @@
 # Upstream open pull-request audit
 
-Audited against `hangwin/mcp-chrome` on 2026-08-31. The fork intentionally adapts
+Refreshed against `hangwin/mcp-chrome` on 2026-09-24 (initial audit 2026-08-31).
+Upstream `master` is still `f48e71751e00bc09725c7e173423cff4f2ccd12a`, already
+contained in this fork. There are no new mainline commits to merge. The fork adapts
 useful changes instead of blindly merging overlapping branches into the session-isolated
 implementation.
+
+## September refresh
+
+- [#383](https://github.com/hangwin/mcp-chrome/pull/383): cherry-picked
+  `bdc0400b845c3570db5098b7d55a53993278a05e` with attribution. URL-aware origin
+  matching closes the loopback-prefix bypass. Added rejection before route execution,
+  malformed-origin and configured-port checks, and actual Fastify/HTTP regression checks.
+- [#382](https://github.com/hangwin/mcp-chrome/pull/382): the per-session factory and
+  Streamable HTTP response ownership are already present. Its `onclose -> server.close()`
+  pattern recurses with our pinned MCP SDK; removed that pattern from the fork after
+  reproducing a stack overflow with a real session DELETE. Also preserve CORS headers
+  on raw SDK responses, expose the session ID, let the SDK write legacy SSE headers,
+  and release each session once during disconnect or server shutdown.
+- [#324](https://github.com/hangwin/mcp-chrome/pull/324): skipped the Codex plugin
+  packaging. Its `npx mcp-chrome-bridge` entry points to the upstream CLI rather than
+  this fork's HTTP endpoint or stdio proxy; the existing fork skill remains authoritative.
+- Reviewed the current list of 29 open PRs. The decisions for the previously reviewed proposals
+  below still apply. The refreshed mainline contains no new merged fixes.
+
+`scripts/verify-native-http.mjs` exercises the compiled server over real sockets:
+21 disallowed requests, permitted browser-origin traffic, simultaneous MCP sessions,
+DELETE without recursion, invalid DELETE preservation, legacy SSE, and shutdown
+cleanup. Extension 1.0.1 packages the existing isolation behavior alongside bridge
+1.0.30; detached-window screenshots retain the limitation in [SCREENSHOTS.md](SCREENSHOTS.md).
+
+## Previous proposals
 
 | PR                                                     | Decision                        | Reason                                                                                                                                                                                   |
 | ------------------------------------------------------ | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

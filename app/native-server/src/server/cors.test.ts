@@ -50,4 +50,26 @@ describe('isOriginAllowed', () => {
   test('rejects a malformed origin instead of throwing', () => {
     expect(isOriginAllowed('not-a-url', SERVER_CONFIG.CORS_ORIGIN)).toBe(false);
   });
+
+  test.each([
+    'null',
+    '',
+    'http://127.0.0.1@attacker.example',
+    'http://attacker.example@127.0.0.1',
+    'http://127.0.0.1/private',
+    'http://127.0.0.1?redirect=attacker.example',
+    'http://127.0.0.1#attacker.example',
+    'http://127.0.0.1:5173.attacker.example',
+  ])('rejects non-origin URL %s', (origin) => {
+    expect(isOriginAllowed(origin, SERVER_CONFIG.CORS_ORIGIN)).toBe(false);
+  });
+
+  test('honors an explicitly configured port', () => {
+    expect(isOriginAllowed('http://127.0.0.1:5173', ['http://127.0.0.1:5173'])).toBe(true);
+    expect(isOriginAllowed('http://127.0.0.1:8080', ['http://127.0.0.1:5173'])).toBe(false);
+  });
+
+  test('ignores malformed allowlist entries', () => {
+    expect(isOriginAllowed('http://127.0.0.1', ['not-a-url'])).toBe(false);
+  });
 });

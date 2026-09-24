@@ -32,6 +32,10 @@ export default tseslint.config(
 
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: { globals: globals.node },
+  },
   // Global rule adjustments
   {
     // Allow intentionally empty catch blocks (common in extension code),

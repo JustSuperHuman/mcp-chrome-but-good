@@ -22,7 +22,7 @@
  * user interaction beyond visiting the page.
  *
  * String entries are now compared as an origin (scheme + hostname, matching
- * any port, since the existing entries never specify one) via the WHATWG URL
+ * any port unless a port is configured) via the WHATWG URL
  * parser instead of a raw string prefix, closing that off. RegExp entries
  * (used for `chrome-extension://`/`moz-extension://`) are unaffected.
  */
@@ -31,6 +31,18 @@ export function isOriginAllowed(origin: string, patterns: readonly (string | Reg
   try {
     parsedOrigin = new URL(origin);
   } catch {
+    return false;
+  }
+
+  // An Origin is not a full URL with credentials, a path, query, or fragment.
+  if (
+    !parsedOrigin.hostname ||
+    parsedOrigin.username ||
+    parsedOrigin.password ||
+    (parsedOrigin.pathname !== '' && parsedOrigin.pathname !== '/') ||
+    parsedOrigin.search ||
+    parsedOrigin.hash
+  ) {
     return false;
   }
 
@@ -46,7 +58,8 @@ export function isOriginAllowed(origin: string, patterns: readonly (string | Reg
     }
     return (
       parsedOrigin.protocol === parsedPattern.protocol &&
-      parsedOrigin.hostname === parsedPattern.hostname
+      parsedOrigin.hostname === parsedPattern.hostname &&
+      (!parsedPattern.port || parsedOrigin.port === parsedPattern.port)
     );
   });
 }
