@@ -165,8 +165,11 @@ if (window.__WEB_FETCHER_HELPER_INITIALIZED__) {
       jsonLdArticleTypes:
         /^Article|AdvertiserContentArticle|NewsArticle|AnalysisNewsArticle|AskPublicNewsArticle|BackgroundNewsArticle|OpinionNewsArticle|ReportageNewsArticle|ReviewNewsArticle|Report|SatiricalArticle|ScholarlyArticle|MedicalScholarlyArticle|SocialMediaPosting|BlogPosting|LiveBlogPosting|DiscussionForumPosting|TechArticle|APIReference$/,
       // used to see if a node's content matches words commonly used for ad blocks or loading indicators
-      adWords: /^(ad(vertising|vertisement)?|pub(licité)?|werb(ung)?|广告|Реклама|Anuncio)$/iu,
-      loadingWords: /^((loading|正在加载|Загрузка|chargement|cargando)(…|\.\.\.)?)$/iu,
+      // \u5e7f\u544a = Chinese "advertisement", \u6b63\u5728\u52a0\u8f7d = Chinese "loading"
+      adWords:
+        /^(ad(vertising|vertisement)?|pub(licité)?|werb(ung)?|\u5e7f\u544a|Реклама|Anuncio)$/iu,
+      loadingWords:
+        /^((loading|\u6b63\u5728\u52a0\u8f7d|Загрузка|chargement|cargando)(…|\.\.\.)?)$/iu,
     },
 
     UNLIKELY_ROLES: [

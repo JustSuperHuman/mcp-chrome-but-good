@@ -134,14 +134,14 @@ const handleToolCall = async (
         };
       }
     }
-    // 发送请求到Chrome扩展并等待响应
+    // Send the request to the Chrome extension and wait for the response
     const response = await nativeMessagingHostInstance.sendRequestToExtensionAndWait(
       {
         name,
         args: withConnectionContext(args, context),
       },
       NativeMessageType.CALL_TOOL,
-      120000, // 延长到 120 秒，避免性能分析等长任务超时
+      120000, // Raised to 120s so long tasks such as performance traces don't time out
     );
     if (response.status === 'success') {
       return response.data;

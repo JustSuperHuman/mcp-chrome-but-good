@@ -62,11 +62,12 @@ export class TextChunker {
 
   private splitIntoSentences(content: string): string[] {
     const processedContent = content
-      .replace(/([。！？])\s*/g, '$1\n')
+      // \u3002\uff01\uff1f = CJK full stop, full-width ! and ?
+      .replace(/([\u3002\uff01\uff1f])\s*/g, '$1\n')
       .replace(/([.!?])\s+(?=[A-Z])/g, '$1\n')
       .replace(/([.!?]["'])\s+(?=[A-Z])/g, '$1\n')
       .replace(/([.!?])\s*$/gm, '$1\n')
-      .replace(/([。！？][""])\s*/g, '$1\n')
+      .replace(/([\u3002\uff01\uff1f][""])\s*/g, '$1\n')
       .replace(/\n\s*\n/g, '\n');
 
     const sentences = processedContent
@@ -83,9 +84,10 @@ export class TextChunker {
 
   private aggressiveSentenceSplitting(content: string): string[] {
     const sentences = content
-      .replace(/([.!?。！？])/g, '$1\n')
-      .replace(/([;；:：])/g, '$1\n')
-      .replace(/([)）])\s*(?=[\u4e00-\u9fa5A-Z])/g, '$1\n')
+      // CJK full stop, full-width ! ? ; : ) and CJK ideographs (\u4e00-\u9fa5)
+      .replace(/([.!?\u3002\uff01\uff1f])/g, '$1\n')
+      .replace(/([;\uff1b:\uff1a])/g, '$1\n')
+      .replace(/([)\uff09])\s*(?=[\u4e00-\u9fa5A-Z])/g, '$1\n')
       .split('\n')
       .map((s) => s.trim())
       .filter((s) => s.length > 15);

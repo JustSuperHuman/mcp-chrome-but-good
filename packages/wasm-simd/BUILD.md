@@ -1,70 +1,70 @@
-# WASM SIMD 构建指南
+# WASM SIMD Build Guide
 
-## 🚀 快速构建
+## 🚀 Quick Build
 
-### 前置要求
+### Prerequisites
 
 ```bash
-# 安装 Rust
+# Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# 安装 wasm-pack
+# Install wasm-pack
 curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 ```
 
-### 构建选项
+### Build Options
 
-1. **从项目根目录构建**（推荐）：
+1. **Build from the project root** (recommended):
 
    ```bash
-   # 构建 WASM 并自动复制到 Chrome 扩展
+   # Build WASM and copy it into the Chrome extension automatically
    npm run build:wasm
    ```
 
-2. **只构建 WASM 包**：
+2. **Build only the WASM package**:
 
    ```bash
-   # 从 packages/wasm-simd 目录
+   # From the packages/wasm-simd directory
    npm run build
 
-   # 或者从任何地方使用 pnpm filter
+   # Or from anywhere with a pnpm filter
    pnpm --filter @chrome-mcp/wasm-simd build
    ```
 
-3. **开发模式构建**：
+3. **Development build**:
    ```bash
-   npm run build:dev  # 未优化版本，构建更快
+   npm run build:dev  # unoptimized, builds faster
    ```
 
-### 构建产物
+### Build Output
 
-构建完成后，在 `pkg/` 目录下会生成：
+After the build, `pkg/` contains:
 
-- `simd_math.js` - JavaScript 绑定
-- `simd_math_bg.wasm` - WebAssembly 二进制文件
-- `simd_math.d.ts` - TypeScript 类型定义
-- `package.json` - NPM 包信息
+- `simd_math.js` - JavaScript bindings
+- `simd_math_bg.wasm` - WebAssembly binary
+- `simd_math.d.ts` - TypeScript type definitions
+- `package.json` - NPM package info
 
-### 集成到 Chrome 扩展
+### Chrome Extension Integration
 
-WASM 文件会自动复制到 `app/chrome-extension/workers/` 目录，Chrome 扩展可以直接使用：
+The WASM files are copied automatically to `app/chrome-extension/workers/`, where the Chrome extension can use them directly:
 
 ```typescript
-// 在 Chrome 扩展中使用
+// Use in the Chrome extension
 const wasmUrl = chrome.runtime.getURL('workers/simd_math.js');
 const wasmModule = await import(wasmUrl);
 ```
 
-## 🔧 开发工作流
+## 🔧 Development Workflow
 
-1. 修改 `src/lib.rs` 中的 Rust 代码
-2. 运行 `npm run build` 重新构建
-3. Chrome 扩展会自动使用新的 WASM 文件
+1. Edit the Rust code in `src/lib.rs`
+2. Run `npm run build` to rebuild
+3. The Chrome extension picks up the new WASM files automatically
 
-## 📊 性能测试
+## 📊 Benchmarks
 
 ```bash
-# 在 Chrome 扩展中运行基准测试
+# Run the benchmark in the Chrome extension
 import { runSIMDBenchmark } from './utils/simd-benchmark';
 await runSIMDBenchmark();
 ```

@@ -9,13 +9,13 @@ jest.mock('../agent/db', () => ({ closeDb: jest.fn() }));
 
 import Server from './index';
 
-describe('服务器测试', () => {
-  // 启动服务器测试实例
+describe('Server tests', () => {
+  // Start the server test instance
   beforeAll(async () => {
     await Server.getInstance().ready();
   });
 
-  // 关闭服务器
+  // Shut down the server
   afterAll(async () => {
     await Server.stop();
     await Server.getInstance().close();

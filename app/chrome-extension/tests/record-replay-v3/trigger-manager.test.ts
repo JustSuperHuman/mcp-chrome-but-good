@@ -1,5 +1,5 @@
 /**
- * @fileoverview TriggerManager 测试 (P4-02)
+ * @fileoverview TriggerManager Tests (P4-02)
  * @description
  * Tests for:
  * - TriggerManager lifecycle (start/stop/refresh)

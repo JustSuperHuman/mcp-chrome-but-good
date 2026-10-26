@@ -25,7 +25,7 @@ function onInput(ev: any) {
     }
     err.value = '';
   } catch (e: any) {
-    err.value = '表达式解析错误';
+    err.value = 'Failed to parse expression';
   }
   emit('update:modelValue', v);
 }

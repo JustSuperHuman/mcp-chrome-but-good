@@ -203,9 +203,9 @@ class VectorSearchTabsContentTool extends BaseBrowserToolExecutor {
       truncated.lastIndexOf('.'),
       truncated.lastIndexOf('!'),
       truncated.lastIndexOf('?'),
-      truncated.lastIndexOf('。'),
-      truncated.lastIndexOf('！'),
-      truncated.lastIndexOf('？'),
+      truncated.lastIndexOf('\u3002'), // CJK full stop
+      truncated.lastIndexOf('\uff01'), // full-width exclamation mark
+      truncated.lastIndexOf('\uff1f'), // full-width question mark
     );
 
     if (lastSentenceEnd > maxLength * 0.7) {

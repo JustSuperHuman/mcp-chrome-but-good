@@ -1,59 +1,59 @@
 /**
- * 随机 Loading 文案
- * 用于 TimelineStatusStep 组件展示趣味等待提示
+ * Random loading messages
+ * Playful waiting hints shown by the TimelineStatusStep component
  */
 
 const loadingTexts = [
-  // 必选神梗
-  '本来应该从从容容游刃有余',
-  '现在是匆匆忙忙连滚带爬',
-  '我知道你很急，但是先别急',
-  '在知识的海洋里狗刨',
-  '让子弹再飞一会儿',
-  '正在为您手搓答案',
-  '浪浪山小妖怪集结中',
-  '别催，已经在写了（新建文件夹）',
-  '正在汗流浃背地思考中',
-  'CPU 都要给我干烧了',
-  // 生活气息
-  '村咖慢焙，精华需要时间',
-  '知识煎饼翻面中',
-  '敬自己一杯，马上好',
-  '正在把灵感放入烤箱',
-  '让答案再泡一会儿',
-  '情绪价值拉满中',
-  '正在为您编织语言的毛衣',
-  // 脑洞大开
-  '神经元蹦迪中',
-  '熬夜的猫头鹰在思考',
-  '给答案上色中',
-  '正在疯狂翻阅知识库',
-  '大脑马戏团开演',
-  '正在把 0 和 1 捏在一起',
-  '正在憋个大招',
-  '放大镜有点起雾，擦擦',
-  '试图理解这个离谱的需求',
-  // 玄幻
-  '正在施法，莫打扰',
-  '唤醒硅基朋友',
-  '正在连接赛博空间的智慧',
-  '道友请留步，正在推演',
-  '穿越知识黑洞',
-  '正在反向解析人类意图',
-  '水晶球有点模糊，拍两下',
-  // 职场
-  '代码跑得比记者还快',
-  '主理人已上线，请稍候',
-  '快马加鞭赶来中',
-  '正在光速搬运知识',
-  '拼图最后一块',
-  '答案即将杀青',
-  '发射倒计时',
-  '目标锁定中',
+  // Classic memes
+  'This was supposed to be calm and effortless',
+  'Now it is a mad scramble',
+  "I know you're in a hurry, but hang on",
+  'Doggy-paddling through the sea of knowledge',
+  'Let the bullets fly a little longer',
+  'Hand-crafting your answer',
+  'Rallying the little goblins',
+  'Already on it (just made a New Folder)',
+  'Sweating bullets over this one',
+  'The CPU is about to melt',
+  // Everyday life
+  'Slow-roasting, good things take time',
+  'Flipping the knowledge pancake',
+  'Raising a glass to myself, almost done',
+  'Popping the inspiration in the oven',
+  'Letting the answer steep a little longer',
+  'Maxing out the good vibes',
+  'Knitting you a sweater of words',
+  // Wild ideas
+  'Neurons hitting the dance floor',
+  'A night owl is pondering',
+  'Coloring in the answer',
+  'Frantically flipping through the knowledge base',
+  'The brain circus is in town',
+  'Squishing 0s and 1s together',
+  'Charging up a special move',
+  'The magnifying glass fogged up, wiping it',
+  'Trying to make sense of this wild request',
+  // Fantasy
+  'Casting a spell, do not disturb',
+  'Waking up our silicon friends',
+  'Tapping into the wisdom of cyberspace',
+  'Hold on, traveler, divining the answer',
+  'Passing through a knowledge black hole',
+  'Reverse-engineering human intent',
+  'The crystal ball is cloudy, giving it a tap',
+  // At work
+  'Code running faster than the news',
+  'The head chef is in, one moment',
+  'Riding over at full gallop',
+  'Hauling knowledge at light speed',
+  'Placing the last piece of the puzzle',
+  'The answer is almost a wrap',
+  'Launch countdown in progress',
+  'Locking on target',
 ];
 
 /**
- * 获取随机 Loading 文案
+ * Get a random loading message
  */
 export function getRandomLoadingText(): string {
   return loadingTexts[Math.floor(Math.random() * loadingTexts.length)];

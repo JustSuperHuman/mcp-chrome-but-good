@@ -1,5 +1,5 @@
 /**
- * @fileoverview Manual Trigger Handler 测试 (P4-08)
+ * @fileoverview Manual Trigger Handler Tests (P4-08)
  * @description
  * Tests for:
  * - Basic install/uninstall operations
