@@ -11,7 +11,15 @@ import IconsResolver from 'unplugin-icons/resolver';
 config({ path: resolve(process.cwd(), '.env') });
 config({ path: resolve(process.cwd(), '.env.local') });
 
-const CHROME_EXTENSION_KEY = process.env.CHROME_EXTENSION_KEY;
+// Release builds (`JUSTBROWSE_RELEASE=1`, see scripts/package-release.mjs) carry JustBrowse's public key, so
+// the unpacked extension has the same ID wherever it is installed and the native host can authorize it.
+// Development builds keep the path-derived ID of the checkout they are loaded from.
+// CHROME_EXTENSION_KEY overrides both.
+const IS_RELEASE = process.env.JUSTBROWSE_RELEASE === '1';
+const JUSTBROWSE_PUBLIC_KEY =
+  'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlQGenfqNfisaq4ng9Tcvz1vGNYPUUHeYOKA85e8gTp6PMqHw0h2M8IAesVtCQkN3QQdD5SDagTfBzDJo9Uxikty6yyG7VI3jyKIlTq7+T554wNrED6JX5YokAYFnDNHvdPa5LifcbjfRkxOuDaZoeE4lAAhqs26K2gw+ZfW9y4n519bO5RqcEFMrEmBV5tnzfowcaUJO+QLOnSzcpj0T4t67VR0fmijsgsK66wf6azj4I6RH6albZ23A0THQ33eZixYNaHC1/1rH75Y53lIIE02rMdbFaRaMLRXOClvsWuWisUkfF+hNOBUUZlxc/Nro1mDW+IHvXd6Hl8weQrgkQwIDAQAB';
+const CHROME_EXTENSION_KEY =
+  process.env.CHROME_EXTENSION_KEY || (IS_RELEASE ? JUSTBROWSE_PUBLIC_KEY : undefined);
 // Detect dev mode early for manifest-level switches
 const IS_DEV = process.env.NODE_ENV !== 'production' && process.env.MODE !== 'production';
 let staticAssetsEmitted = false;
@@ -50,14 +58,41 @@ function stableStaticAssets() {
   };
 }
 
+// CJK characters in the emitted JavaScript (our escaped regexes, and the tokenizer, ELK and linkify tables of
+// dependencies) are written as \uXXXX escapes, so the shipped extension holds no literal Chinese text.
+// JavaScript reads an escape exactly like the character in strings, regexes and templates.
+const CJK = /[\u2e80-\u2fff\u3000-\u9fff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef]/g;
+function escapeCjk() {
+  return {
+    name: 'justbrowse-escape-cjk',
+    enforce: 'post' as const,
+    // after every renderChunk (Vite's es2015 transpile writes escapes back out as characters)
+    generateBundle: {
+      order: 'post' as const,
+      handler(_options: unknown, bundle: Record<string, { type: string; code?: string }>) {
+        for (const chunk of Object.values(bundle)) {
+          if (chunk.type === 'chunk' && chunk.code && chunk.code.match(CJK)) {
+            chunk.code = chunk.code.replace(
+              CJK,
+              (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+            );
+          }
+        }
+      },
+    },
+  };
+}
+
 // See https://wxt.dev/api/config.html
 export default defineConfig({
+  // a release build goes beside the development one, never over the copy loaded in a browser
+  outDir: IS_RELEASE ? '.output-release' : '.output',
   modules: ['@wxt-dev/module-vue'],
   runner: {
-    // 方案1: 禁用自动启动（推荐）
+    // Option 1: don't launch a browser (recommended)
     disabled: true,
 
-    // 方案2: 如果要启用自动启动并使用现有配置，取消注释下面的配置
+    // Option 2: launch one with your existing profile by uncommenting the settings below
     // chromiumArgs: [
     //   '--user-data-dir=' + homedir() + (process.platform === 'darwin'
     //     ? '/Library/Application Support/Google/Chrome'
@@ -68,9 +103,9 @@ export default defineConfig({
     // ],
   },
   manifest: {
-    // Use environment variable for the key, fallback to undefined if not set
+    // JustBrowse's key for release builds (a stable extension ID), else none
     key: CHROME_EXTENSION_KEY,
-    default_locale: 'zh_CN',
+    default_locale: 'en',
     name: '__MSG_extensionName__',
     description: '__MSG_extensionDescription__',
     permissions: [
@@ -137,15 +172,15 @@ export default defineConfig({
     web_accessible_resources: [
       {
         resources: [
-          '/models/*', // 允许访问 public/models/ 下的所有文件
-          '/workers/*', // 允许访问 workers 文件
-          '/inject-scripts/*', // 允许内容脚本注入的助手文件
+          '/models/*', // everything under public/models/
+          '/workers/*', // the worker files
+          '/inject-scripts/*', // helper files that content scripts inject
         ],
         matches: ['<all_urls>'],
       },
     ],
-    // 注意：以下安全策略在开发环境会阻断 dev server 的资源加载，
-    // 只在生产环境启用，开发环境交由 WXT 默认策略处理。
+    // These security policies block the dev server's assets, so they apply to production builds
+    // only; development uses WXT's default policy.
     ...(IS_DEV
       ? {}
       : {
@@ -160,6 +195,7 @@ export default defineConfig({
   },
   vite: (env) => ({
     plugins: [
+      escapeCjk(),
       // TailwindCSS v4 Vite plugin – no PostCSS config required
       tailwindcss(),
       // Auto-register SVG icons as Vue components; all icons are bundled locally
@@ -182,13 +218,13 @@ export default defineConfig({
           }) as any)),
     ],
     build: {
-      // 我们的构建产物需要兼容到es6
+      // the output must run on ES6
       target: 'es2015',
-      // 非生产环境下生成sourcemap
+      // source maps outside production
       sourcemap: env.mode !== 'production',
-      // 禁用gzip 压缩大小报告，因为压缩大型文件可能会很慢
+      // skip the gzip size report: compressing large files is slow
       reportCompressedSize: false,
-      // chunk大小超过1500kb是触发警告
+      // warn about chunks over 1500 kB
       chunkSizeWarningLimit: 1500,
       minify: false,
     },

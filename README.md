@@ -38,13 +38,85 @@ See [the research and target design](docs/RESEARCH.md),
 > broker refactor described in the architecture note. Recorded flows also need
 > end-to-end session propagation before they should be treated as isolated.
 
-## Requirements
+## Install
 
-- Node.js 20.19 or newer (or Node.js 22.12 or newer)
-- pnpm 8 (the commands below pin `8.15.9` through Corepack)
-- Chrome or Chromium with Developer mode available
+One command installs everything except the step a browser only allows by hand: the
+extension, its native bridge, the `justbrowse-browser` agent skill (into Claude Code,
+Codex and `~/.agents` when you use them) and the `justbrowse` MCP server for Claude
+Code and Codex. It needs Node.js 20 or newer and installs for the current user only.
 
-## Build and install from this repository
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/JustSuperHuman/mcp-chrome-but-good/master/install.ps1 | iex
+```
+
+macOS and Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/JustSuperHuman/mcp-chrome-but-good/master/install.sh | bash
+```
+
+With [bro](https://github.com/JustSuperHuman/bro-cli), `bro install justbrowse` runs the same
+installer (it is also in bro's Quick Install).
+
+The installer downloads the newest [release](https://github.com/JustSuperHuman/mcp-chrome-but-good/releases),
+checks it against the release's `SHA256SUMS`, and puts it in `%LOCALAPPDATA%\JustBrowseMCP`
+(macOS `~/Library/Application Support/JustBrowseMCP`, Linux `~/.local/share/justbrowse-mcp`).
+It registers the native host for Chrome, Chromium, Edge and Brave. Then, once:
+
+1. Open `chrome://extensions` (or `edge://extensions`) and turn on **Developer mode**.
+2. Choose **Load unpacked** and select the `extension` folder the installer printed
+   (on Windows its path is on your clipboard).
+3. Click the JustBrowseMCP icon, then **Connect**.
+4. Check it: `Invoke-RestMethod http://127.0.0.1:12306/ping` (or `curl` it) shows
+   `extensionConnected: true`. The endpoint answers HTTP 503 while the bridge runs
+   without a connected extension.
+
+The released extension carries JustBrowse's key, so its ID is
+`dgpjcgoidnfedcpaijeelljbppcfhcll` wherever it is unpacked, and the native host is
+registered for that ID.
+
+### Update
+
+Run the same command again. It replaces the extension and the bridge in place (stopping
+a running bridge first), then asks you to click **Reload** on the extensions page.
+Set `JUSTBROWSE_VERSION` (for example `v1.1.0`) to install a particular release.
+
+### Start automatically on Windows
+
+The browser extension starts the native bridge and reconnects automatically after
+host failures. Windows must also start the browser profile containing the extension.
+After connecting once in the extension popup, install a hidden task for your Windows
+sign-in (use the executable and profile where you installed JustBrowse):
+
+```powershell
+.\scripts\install-windows-startup.ps1 -BrowserPath 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' -ProfileDirectory Default
+Start-ScheduledTask -TaskName 'JustBrowseMCP Startup'
+Invoke-RestMethod http://127.0.0.1:12306/ping
+```
+
+The task runs as the current user without elevation, opens no browser window, checks
+the extension connection, and retries startup failures up to three times. It leaves
+an already-connected bridge alone. Configuration and startup logs are stored under
+`%LOCALAPPDATA%\JustBrowseMCP`. This starts at sign-in, since the extension requires
+your browser profile; it is not a system service running before login. Disconnecting
+from the popup disables the extension's auto-connect until you click Connect again.
+
+To remove automatic startup:
+
+```powershell
+Unregister-ScheduledTask -TaskName 'JustBrowseMCP Startup' -Confirm:$false
+```
+
+Verify the Windows native launcher with `node scripts/verify-windows-launcher.mjs`.
+
+## Build from source
+
+Requirements: Node.js 20.19 or newer (or 22.12 or newer), pnpm 8 (the commands pin
+`8.15.9`; on Node.js 25 and newer, which no longer ship Corepack, use
+`npx pnpm@8.15.9` in place of `corepack pnpm@8.15.9`), and Chrome or Chromium with
+Developer mode available.
 
 ```powershell
 git clone https://github.com/JustSuperHuman/mcp-chrome-but-good.git
@@ -56,49 +128,30 @@ corepack pnpm@8.15.9 build:extension
 corepack pnpm@8.15.9 --filter mcp-chrome-bridge register:dev
 ```
 
-Then:
+Then load `app/chrome-extension/.output/chrome-mv3` with **Load unpacked** and click
+**Connect** in the popup. A development build has no manifest key, so its ID comes
+from the folder it is loaded from: keep that folder in place, and re-run the build
+and `register:dev` after moving the checkout (the native-messaging manifest holds an
+absolute host path). After rebuilding, click **Reload** on the extension; reloading or
+reconnecting starts the rebuilt native host.
 
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Choose **Load unpacked** and select
-   `app/chrome-extension/.output/chrome-mv3` from this checkout.
-4. Open the JustBrowseMCP extension and click **Connect**.
-5. Confirm the bridge and extension are healthy:
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:12306/ping
-```
-
-A healthy response includes `extensionConnected: true`. The endpoint returns HTTP
-503 when the native host is running without a live extension connection.
-
-Re-run the build and `register:dev` commands after moving the checkout because the
-native-messaging manifest contains an absolute host path.
-
-## Update an existing installation
-
-The 2026-09-24 update is extension **1.0.1** with native bridge **1.0.30**. It
-integrates upstream's origin-validation fix and fixes MCP disconnect recursion,
-streamed CORS headers, and session cleanup. See [release notes](releases/README.md).
-
-After building both components, open `chrome://extensions` (or `edge://extensions`)
-and click **Reload** on the existing extension. Keep its unpacked directory at
-`app/chrome-extension/.output/chrome-mv3`; without a manifest key, changing the
-directory can change its extension ID and break native-host authorization. Then
-open the popup and reconnect if needed. Reloading/reconnecting starts the rebuilt
-native host; replacing the extension ZIP alone does not update a running bridge.
-
-Create and check a distributable ZIP with:
+### Package a release
 
 ```powershell
-corepack pnpm@8.15.9 --filter chrome-mcp-server zip
-corepack pnpm@8.15.9 verify:release
+node scripts/package-release.mjs
+$env:JUSTBROWSE_RELEASE = '1'; node scripts/verify-extension-build.mjs; node scripts/verify-native-http.mjs
 ```
 
-The ZIP is `app/chrome-extension/.output/chrome-mcp-server-1.0.1-chrome.zip`.
-The verification command checks production assets and exercises the compiled
-bridge over real HTTP, including concurrent clients and legacy SSE. Its browser
-connection is a test double; run the live checks below after reloading Chrome.
+This builds shared, native and the extension (with JustBrowse's key, into
+`app/chrome-extension/.output-release`, never over a development copy loaded in a
+browser), then writes `release/justbrowse-<version>.zip` and `.tar.gz` (the extension,
+the bridge with `chrome-mcp-shared` vendored, the skill and both installers) and
+`release/SHA256SUMS`. Attach those three files to a GitHub release tagged
+`v<version>`; the installers download the newest one. Run `install.ps1` or `install.sh`
+from an unpacked bundle to install it without downloading. The verification checks
+production assets and exercises the compiled bridge over real HTTP, including
+concurrent clients and legacy SSE; its browser connection is a test double, so run
+the live checks below after reloading the browser.
 
 ## Connect an MCP client
 
@@ -135,9 +188,10 @@ The stdio proxy connects to the same local HTTP endpoint configured in
 
 ## Install the agent skill
 
-The repository includes a client-neutral skill at
-[`skills/justbrowse-browser/SKILL.md`](skills/justbrowse-browser/SKILL.md). Copy the
-whole `justbrowse-browser` directory into your agent's skill directory, for example:
+The installer copies the client-neutral skill at
+[`skills/justbrowse-browser/SKILL.md`](skills/justbrowse-browser/SKILL.md) into the
+agent homes it finds. To install it by hand, copy the whole `justbrowse-browser`
+directory into your agent's skill directory, for example:
 
 ```powershell
 Copy-Item -Recurse skills\justbrowse-browser "$env:USERPROFILE\.codex\skills\justbrowse-browser"

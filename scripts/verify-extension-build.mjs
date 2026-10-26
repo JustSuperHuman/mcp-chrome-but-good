@@ -6,11 +6,17 @@ import { createHash } from 'node:crypto';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const extension = resolve(root, 'app/chrome-extension');
-const output = resolve(extension, '.output/chrome-mv3');
+// JUSTBROWSE_RELEASE=1 checks the release build (scripts/package-release.mjs) instead of the development one
+const release = process.env.JUSTBROWSE_RELEASE === '1';
+const output = resolve(extension, release ? '.output-release/chrome-mv3' : '.output/chrome-mv3');
 const manifest = JSON.parse(await readFile(resolve(output, 'manifest.json'), 'utf8'));
 const pkg = JSON.parse(await readFile(resolve(extension, 'package.json'), 'utf8'));
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.version, pkg.version);
+assert.equal(manifest.default_locale, 'en');
+if (release) assert.ok(manifest.key, 'a release build carries the JustBrowse key (a stable extension ID)');
+const locales = await readdir(resolve(output, '_locales'));
+for (const locale of ['zh_CN', 'zh_TW', 'ja']) assert.ok(!locales.includes(locale), `Unexpected locale: ${locale}`);
 assert.ok(!manifest.content_security_policy.extension_pages.includes("'unsafe-eval'"));
 assert.ok(!manifest.content_security_policy.extension_pages.includes('localhost'));
 for (const permission of ['nativeMessaging', 'tabs', 'tabGroups', 'debugger', 'storage']) {
@@ -71,7 +77,9 @@ for (const key of ['name', 'description']) {
   const message = /^__MSG_(.+)__$/.exec(manifest[key]);
   if (message) assert.ok(locale[message[1]]?.message, `Missing localized ${key}`);
 }
-const archive = resolve(extension, '.output', `${pkg.name}-${pkg.version}-chrome.zip`);
+const archive = release
+  ? resolve(root, 'release', `justbrowse-${pkg.version}.zip`)
+  : resolve(extension, '.output', `${pkg.name}-${pkg.version}-chrome.zip`);
 const archiveBytes = await readFile(archive);
 console.log(
   JSON.stringify(

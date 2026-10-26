@@ -1,7 +1,11 @@
 export const COMMAND_NAME = 'mcp-chrome-bridge';
-export const EXTENSION_ID = 'pafdmkonlckfdodnpmdbpjmnjnjglihe';
+// The released JustBrowse extension: its manifest key gives it this ID wherever it is unpacked.
+export const EXTENSION_ID = 'dgpjcgoidnfedcpaijeelljbppcfhcll';
+// Also authorized: a development build loaded from F:\ChromeMCP\JustBrowseMCP (a path-derived ID) and the
+// upstream mcp-chrome releases.
 export const ALLOWED_EXTENSION_IDS = [
   EXTENSION_ID,
+  'pafdmkonlckfdodnpmdbpjmnjnjglihe',
   'dlniejmnclnmndphlmnhbgeehfpoaeme',
   'beiplkpghdbfabdgkadklimbjojmklff',
   'hbdgbgagpkpjffpklnamcljpakneikee',

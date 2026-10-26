@@ -9,6 +9,7 @@ lerna-debug.log*
 
 node_modules
 .output
+.output-release
 stats.html
 stats-*.json
 .wxt
@@ -52,3 +53,5 @@ CLAUDE.md
 /live-test-output/
 /chrome-mcp-server-1.0.0-chrome/
 /chrome-mcp-server-1.0.0-chrome.zip
+# Release bundles (scripts/package-release.mjs)
+/release/
