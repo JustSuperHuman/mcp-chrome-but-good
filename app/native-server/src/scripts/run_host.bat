@@ -26,7 +26,7 @@ echo Wrapper script called at %DATE% %TIME% > "%WRAPPER_LOG%"
 echo SCRIPT_DIR: %SCRIPT_DIR% >> "%WRAPPER_LOG%"
 echo LOG_DIR: %LOG_DIR% >> "%WRAPPER_LOG%"
 echo NODE_SCRIPT: %NODE_SCRIPT% >> "%WRAPPER_LOG%"
-echo Initial PATH: %PATH% >> "%WRAPPER_LOG%"
+REM Do not echo PATH: quoted entries and shell metacharacters can corrupt stdout.
 echo CHROME_MCP_NODE_PATH: %CHROME_MCP_NODE_PATH% >> "%WRAPPER_LOG%"
 echo VOLTA_HOME: %VOLTA_HOME% >> "%WRAPPER_LOG%"
 echo ASDF_DATA_DIR: %ASDF_DATA_DIR% >> "%WRAPPER_LOG%"
@@ -173,7 +173,9 @@ if not exist "%NODE_SCRIPT%" (
 
 REM Add Node.js bin directory to PATH for child processes
 for %%I in ("%NODE_EXEC%") do set "NODE_BIN_DIR=%%~dpI"
-if defined PATH (set "PATH=%NODE_BIN_DIR%;%PATH%") else (set "PATH=%NODE_BIN_DIR%")
+REM Expand PATH after cmd parses this block. Existing PATH entries may contain
+REM quotes, parentheses or ampersands (for example BrowserStackLocal).
+if defined PATH (set "PATH=!NODE_BIN_DIR!;!PATH!") else (set "PATH=!NODE_BIN_DIR!")
 echo Added %NODE_BIN_DIR% to PATH >> "%WRAPPER_LOG%"
 
 REM Log Claude Code Router (CCR) related env vars for debugging
@@ -182,7 +184,7 @@ if defined ANTHROPIC_BASE_URL (
     echo ANTHROPIC_BASE_URL is set: %ANTHROPIC_BASE_URL% >> "%WRAPPER_LOG%"
 )
 if defined ANTHROPIC_AUTH_TOKEN (
-    echo ANTHROPIC_AUTH_TOKEN is set (value hidden) >> "%WRAPPER_LOG%"
+    echo ANTHROPIC_AUTH_TOKEN is set ^(value hidden^) >> "%WRAPPER_LOG%"
 )
 
 echo Executing: "%NODE_EXEC%" "%NODE_SCRIPT%" >> "%WRAPPER_LOG%"
