@@ -14,7 +14,15 @@
 //   node scripts/package-release.mjs --no-build package what is already built
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,16 +49,23 @@ const bridgePkg = read('app/native-server/package.json');
 const sharedPkg = read('packages/shared/package.json');
 const version = extensionPkg.version;
 
+run('node scripts/verify-english-only.mjs');
+
 if (!process.argv.includes('--no-build')) {
   run(`${pnpm} build:shared`);
   run(`${pnpm} build:native`);
-  run(`${pnpm} --filter chrome-mcp-server build`, { JUSTBROWSE_RELEASE: '1', NODE_ENV: 'production' });
+  run(`${pnpm} --filter chrome-mcp-server build`, {
+    JUSTBROWSE_RELEASE: '1',
+    NODE_ENV: 'production',
+  });
 }
 
 const built = join(root, 'app/chrome-extension/.output-release/chrome-mv3');
 const manifest = JSON.parse(readFileSync(join(built, 'manifest.json'), 'utf8'));
-if (!manifest.key) throw new Error(`${built} has no manifest key: build it with JUSTBROWSE_RELEASE=1`);
-if (manifest.version !== version) throw new Error(`built extension is ${manifest.version}, package.json says ${version}`);
+if (!manifest.key)
+  throw new Error(`${built} has no manifest key: build it with JUSTBROWSE_RELEASE=1`);
+if (manifest.version !== version)
+  throw new Error(`built extension is ${manifest.version}, package.json says ${version}`);
 
 const out = join(root, 'release');
 const name = `justbrowse-${version}`;
@@ -67,30 +82,47 @@ cpSync(join(root, 'app/native-server/dist'), join(bridge, 'dist'), {
   recursive: true,
   filter: (src) => !/[\\/]dist[\\/](logs|node_path\.txt)$/.test(src) && !src.endsWith('.test.js'),
 });
-const { devDependencies: _d, scripts: _s, husky: _h, 'lint-staged': _l, files: _f, ...bridgeManifest } = bridgePkg;
-bridgeManifest.dependencies = { ...bridgePkg.dependencies, 'chrome-mcp-shared': 'file:vendor/chrome-mcp-shared' };
+const bridgeManifest = { ...bridgePkg };
+for (const field of ['devDependencies', 'scripts', 'husky', 'lint-staged', 'files'])
+  delete bridgeManifest[field];
+bridgeManifest.dependencies = {
+  ...bridgePkg.dependencies,
+  'chrome-mcp-shared': 'file:vendor/chrome-mcp-shared',
+};
 writeFileSync(join(bridge, 'package.json'), JSON.stringify(bridgeManifest, null, 2) + '\n');
 const shared = join(bridge, 'vendor/chrome-mcp-shared');
 cpSync(join(root, 'packages/shared/dist'), join(shared, 'dist'), { recursive: true });
-const { devDependencies: _sd, scripts: _ss, ...sharedManifest } = sharedPkg;
+const sharedManifest = { ...sharedPkg };
+for (const field of ['devDependencies', 'scripts']) delete sharedManifest[field];
 writeFileSync(join(shared, 'package.json'), JSON.stringify(sharedManifest, null, 2) + '\n');
 
 // the agent skill, the installers and the docs
 cpSync(join(root, 'skills'), join(stage, 'skills'), { recursive: true });
-for (const f of ['install.ps1', 'install.sh', 'README.md', 'LICENSE']) cpSync(join(root, f), join(stage, f));
+for (const f of ['install.ps1', 'install.sh', 'README.md', 'LICENSE'])
+  cpSync(join(root, f), join(stage, f));
 writeFileSync(
   join(stage, 'release.json'),
-  JSON.stringify({ version, bridge: bridgePkg.version, extensionId, mcp: 'http://127.0.0.1:12306/mcp' }, null, 2) + '\n',
+  JSON.stringify(
+    { version, bridge: bridgePkg.version, extensionId, mcp: 'http://127.0.0.1:12306/mcp' },
+    null,
+    2,
+  ) + '\n',
 );
 
+run('node scripts/verify-english-only.mjs --release');
+
 // the archives (bsdtar on Windows and macOS, GNU tar and zip elsewhere)
-for (const f of readdirSync(out)) if (/^justbrowse-.*\.(zip|tar\.gz)$|^SHA256SUMS$/.test(f)) rmSync(join(out, f));
+for (const f of readdirSync(out))
+  if (/^justbrowse-.*\.(zip|tar\.gz)$|^SHA256SUMS$/.test(f)) rmSync(join(out, f));
 const zip = join(out, `${name}.zip`);
 const tgz = join(out, `${name}.tar.gz`);
 const staged = join(out, 'stage');
 // Windows' own bsdtar, not a GNU tar from Git Bash (which reads "F:" as a remote host and can't write zips);
 // paths stay relative to the stage for the same reason
-const tar = process.platform === 'win32' ? `"${join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')}"` : 'tar';
+const tar =
+  process.platform === 'win32'
+    ? `"${join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')}"`
+    : 'tar';
 if (process.platform === 'linux') {
   execSync(`zip -qr "../${name}.zip" "${name}"`, { cwd: staged, stdio: 'inherit' });
 } else {
@@ -99,8 +131,12 @@ if (process.platform === 'linux') {
 execSync(`${tar} -c -z -f "../${name}.tar.gz" "${name}"`, { cwd: staged, stdio: 'inherit' });
 
 const sums = [zip, tgz]
-  .map((f) => `${createHash('sha256').update(readFileSync(f)).digest('hex')}  ${f.split(/[\\/]/).pop()}`)
+  .map(
+    (f) =>
+      `${createHash('sha256').update(readFileSync(f)).digest('hex')}  ${f.split(/[\\/]/).pop()}`,
+  )
   .join('\n');
 writeFileSync(join(out, 'SHA256SUMS'), sums + '\n');
 console.log(`\n${sums}\n\nextension ${version} (${extensionId}) · bridge ${bridgePkg.version}`);
-if (!existsSync(join(stage, 'bridge/dist/cli.js'))) throw new Error('the bridge has no dist/cli.js');
+if (!existsSync(join(stage, 'bridge/dist/cli.js')))
+  throw new Error('the bridge has no dist/cli.js');

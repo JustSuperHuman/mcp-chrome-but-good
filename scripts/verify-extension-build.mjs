@@ -14,9 +14,18 @@ const pkg = JSON.parse(await readFile(resolve(extension, 'package.json'), 'utf8'
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.version, pkg.version);
 assert.equal(manifest.default_locale, 'en');
-if (release) assert.ok(manifest.key, 'a release build carries the JustBrowse key (a stable extension ID)');
+if (release) {
+  assert.ok(manifest.key, 'a release build carries the JustBrowse key (a stable extension ID)');
+  const extensionId = createHash('sha256')
+    .update(Buffer.from(manifest.key, 'base64'))
+    .digest('hex')
+    .slice(0, 32)
+    .replace(/[0-9a-f]/g, (digit) => String.fromCharCode(97 + parseInt(digit, 16)));
+  assert.equal(extensionId, 'dgpjcgoidnfedcpaijeelljbppcfhcll', 'Release extension ID changed');
+}
 const locales = await readdir(resolve(output, '_locales'));
-for (const locale of ['zh_CN', 'zh_TW', 'ja']) assert.ok(!locales.includes(locale), `Unexpected locale: ${locale}`);
+for (const locale of ['zh_CN', 'zh_TW', 'ja'])
+  assert.ok(!locales.includes(locale), `Unexpected locale: ${locale}`);
 assert.ok(!manifest.content_security_policy.extension_pages.includes("'unsafe-eval'"));
 assert.ok(!manifest.content_security_policy.extension_pages.includes('localhost'));
 for (const permission of ['nativeMessaging', 'tabs', 'tabGroups', 'debugger', 'storage']) {

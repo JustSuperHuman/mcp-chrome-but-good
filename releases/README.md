@@ -6,6 +6,35 @@ Releases are published on GitHub:
 installers in the [README](../README.md#install) download the newest and check it against
 `SHA256SUMS`. `node scripts/package-release.mjs` builds them.
 
+## 1.1.1 — 2026-10-31
+
+Extension **1.1.1** pairs with native bridge **1.1.1**.
+
+- File uploads include upstream [PR #389](https://github.com/hangwin/mcp-chrome/pull/389),
+  with additional fixes for DNS rebinding, mixed IPv4/IPv6 answers, private IPv6
+  ranges and directory links. Downloads accept public HTTP(S) destinations and
+  recheck every redirect. Native temporary-file reads and cleanup stay inside the
+  upload directory; repeated file names create separate files.
+- Release packaging checks the source and every shipped text file for Chinese
+  text. The released extension keeps English as its default locale and excludes
+  the Chinese and Japanese locale directories. Release verification also checks
+  that the stable extension ID has not changed.
+- The [upstream audit](../docs/UPSTREAM_PR_AUDIT.md) is current through October 31.
+  Upstream mainline has no newer commits. The latest per-session MCP server proposal
+  is already covered by the fork's session implementation.
+
+Run the same one-line installer to update, then reload the extension. `fileUrl`
+downloads from localhost or a private network are now rejected; use `filePath` for
+an existing local file or `base64Data` for supplied bytes.
+
+Validation: 659 extension tests and 133 native tests pass. The release build,
+native TypeScript, lint on changed code, English-text audit, HTTP/SSE transport
+checks and Windows launcher checks pass. All 95 shipped scripts parse, both
+archives contain the same 219 files, and their SHA-256 checksums match. A clean
+bundle installs its production dependencies and passes the bridge CLI version
+check and an in-memory SQLite query. A public HTTPS download and temporary-file
+cleanup also pass against the compiled bridge.
+
 ## 1.1.0 — 2026-10-26
 
 Extension **1.1.0** pairs with native bridge **1.1.0**.

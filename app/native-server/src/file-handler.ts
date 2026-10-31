@@ -4,7 +4,40 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import * as dns from 'dns';
 import * as net from 'net';
+import * as http from 'http';
+import * as https from 'https';
+import { Readable } from 'stream';
 import fetch from 'node-fetch';
+
+const protectedAddresses = new net.BlockList();
+for (const [address, prefix] of [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+] as const)
+  protectedAddresses.addSubnet(address, prefix, 'ipv4');
+for (const [address, prefix] of [
+  ['2001::', 32], // Teredo tunnels can embed private IPv4 addresses.
+  ['2001:2::', 48],
+  ['2001:db8::', 32],
+  ['2002::', 16], // 6to4 tunnels can embed private IPv4 addresses.
+  ['3fff::', 20],
+] as const)
+  protectedAddresses.addSubnet(address, prefix, 'ipv6');
+const publicIpv6Addresses = new net.BlockList();
+publicIpv6Addresses.addSubnet('2000::', 3, 'ipv6');
+publicIpv6Addresses.addSubnet('::ffff:0:0', 96, 'ipv6');
 
 /**
  * File handler for managing file uploads through the native messaging host
@@ -18,6 +51,7 @@ export class FileHandler {
     if (!fs.existsSync(this.tempDir)) {
       fs.mkdirSync(this.tempDir, { recursive: true });
     }
+    this.tempDir = fs.realpathSync(this.tempDir);
   }
 
   /**
@@ -80,75 +114,55 @@ export class FileHandler {
    */
   private async downloadFile(fileUrl: string, fileName?: string): Promise<any> {
     try {
-      await this.validateFileUrl(fileUrl);
-      const response = await fetch(fileUrl, { redirect: 'manual' });
-      let finalResponse = response;
-
-      // Follow redirects manually so every hop is re-validated against the same policy
-      // (a 3xx to 169.254.169.254 or 127.0.0.1 must not bypass the check above)
-      for (let hop = 0; hop < FileHandler.MAX_REDIRECTS; hop++) {
-        const status = finalResponse.status;
-        if (
-          status !== 301 &&
-          status !== 302 &&
-          status !== 303 &&
-          status !== 307 &&
-          status !== 308
-        ) {
-          break;
-        }
-        const location = finalResponse.headers.get('location');
-        if (!location) break;
-        const nextUrl = new URL(location, finalResponse.url || fileUrl).toString();
-        await this.validateFileUrl(nextUrl);
-        finalResponse = await fetch(nextUrl, { redirect: 'manual' });
-      }
-
-      if (!finalResponse.ok) {
-        throw new Error(`Failed to download file: ${finalResponse.statusText}`);
-      }
-
-      // Generate filename if not provided
       const finalFileName = this.sanitizeFileName(fileName || this.generateFileName(fileUrl));
-      const filePath = path.join(this.tempDir, finalFileName);
-
-      // Get the file buffer
-      const buffer = await finalResponse.buffer();
-
-      // Save to file
-      fs.writeFileSync(filePath, buffer);
-
-      return {
-        success: true,
-        filePath: filePath,
-        fileName: finalFileName,
-        size: buffer.length,
-      };
+      let currentUrl = new URL(fileUrl).toString();
+      for (let hop = 0; hop <= FileHandler.MAX_REDIRECTS; hop++) {
+        const addresses = await this.validateFileUrl(currentUrl);
+        // Pin the socket lookup to the checked addresses. Resolving again inside
+        // fetch would allow DNS rebinding between validation and connection.
+        const lookup: net.LookupFunction = (_host, options, callback) => {
+          const family = Number(options.family);
+          const candidates = family
+            ? addresses.filter((entry) => entry.family === family)
+            : addresses;
+          if (!candidates.length) {
+            callback(new Error('No validated address for the requested family'), []);
+          } else if (options.all) {
+            callback(null, candidates);
+          } else {
+            callback(null, candidates[0].address, candidates[0].family);
+          }
+        };
+        const Agent = new URL(currentUrl).protocol === 'https:' ? https.Agent : http.Agent;
+        const agent = new Agent({ lookup });
+        try {
+          const response = await fetch(currentUrl, { redirect: 'manual', agent, timeout: 30000 });
+          if ([301, 302, 303, 307, 308].includes(response.status)) {
+            (response.body as Readable | null)?.destroy();
+            if (hop === FileHandler.MAX_REDIRECTS)
+              throw new Error('Too many file download redirects');
+            const location = response.headers.get('location');
+            if (!location) throw new Error('File download redirect has no Location header');
+            currentUrl = new URL(location, currentUrl).toString();
+            continue;
+          }
+          if (!response.ok) {
+            (response.body as Readable | null)?.destroy();
+            throw new Error(`Failed to download file: ${response.statusText}`);
+          }
+          const buffer = await response.buffer();
+          const filePath = this.writeTempFile(buffer, finalFileName);
+          return { success: true, filePath, fileName: finalFileName, size: buffer.length };
+        } finally {
+          agent.destroy();
+        }
+      }
     } catch (error) {
       throw new Error(`Failed to download file from URL: ${error}`);
     }
   }
 
   private static readonly ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
-
-  // Ranges the SSRF guard treats as NOT publicly routable (issue #380):
-  // loopback incl. IPv6 ::1 / mapped ::ffff:127/8, link-local (169.254/16
-  // cloud metadata, fe80::/10), unspecified, RFC1918, CGNAT 100.64/10,
-  // multicast/reserved/broadcast, IPv4-mapped, documentation-only
-  // 2001:db8::/32, and deprecated tunnels (Teredo 2001::/32, 6to4
-  // 2002::/16) whose embedded v4 can be loopback.
-  private static readonly PROTECTED_V4_RANGES: Array<[string, number, string]> = [
-    ['127.0.0.0', 8, 'loopback'],
-    ['10.0.0.0', 8, 'private'],
-    ['172.16.0.0', 12, 'private'],
-    ['192.168.0.0', 16, 'private'],
-    ['169.254.0.0', 16, 'link-local (cloud metadata)'],
-    ['100.64.0.0', 10, 'CGNAT'],
-    ['224.0.0.0', 4, 'multicast'],
-    ['240.0.0.0', 4, 'reserved'],
-    ['255.255.255.255', 32, 'broadcast'],
-    ['0.0.0.0', 8, 'this-host'],
-  ];
 
   private static readonly MAX_REDIRECTS = 5;
 
@@ -158,7 +172,7 @@ export class FileHandler {
    * unicast address, and reject loopback / link-local / private / metadata
    * targets. Applied to the initial URL and re-applied to every redirect hop.
    */
-  private async validateFileUrl(rawUrl: string): Promise<void> {
+  private async validateFileUrl(rawUrl: string): Promise<dns.LookupAddress[]> {
     let parsed: URL;
     try {
       parsed = new URL(rawUrl);
@@ -171,6 +185,8 @@ export class FileHandler {
         `Unsupported protocol '${parsed.protocol}' in fileUrl (allowed: http, https): ${rawUrl}`,
       );
     }
+    if (parsed.username || parsed.password)
+      throw new Error('Credentials are not allowed in fileUrl');
 
     const port = parsed.port ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 80;
     if (!Number.isFinite(port) || port <= 0 || port > 65535) {
@@ -198,33 +214,16 @@ export class FileHandler {
         );
       }
     }
+    return addresses;
   }
 
-  private async resolveHostAddresses(
-    host: string,
-  ): Promise<Array<{ address: string; family: number }>>;
-  private async resolveHostAddresses(
-    host: string,
-  ): Promise<Array<{ address: string; family: number }>> {
+  private async resolveHostAddresses(host: string): Promise<dns.LookupAddress[]> {
     if (net.isIP(host)) {
       return [{ address: host, family: net.isIP(host) }];
     }
 
-    try {
-      const records = await dns.promises.resolve6(host);
-      const v6 = records.map((address) => ({ address, family: 6 }));
-      if (v6.length > 0) return v6;
-    } catch {
-      // fall through to A / handle below
-    }
-
-    try {
-      const v4 = (await dns.promises.resolve4(host)).map((address) => ({ address, family: 4 }));
-      if (v4.length > 0) return v4;
-    } catch {
-      // fall through
-    }
-
+    const addresses = await dns.promises.lookup(host, { all: true, verbatim: true });
+    if (addresses.length) return addresses;
     throw new Error(`Unable to resolve host in fileUrl: ${host}`);
   }
 
@@ -235,114 +234,13 @@ export class FileHandler {
    * broadcast/this-host, plus IPv4 embedded in those v6 forms.
    */
   private isProtectedAddress(address: string, family: number): boolean {
-    if (family === 6) {
-      const lower = address.toLowerCase();
-
-      // Dotted-v4 suffix forms ('::ffff:127.0.0.1', '::127.0.0.1'): rewrite the
-      // trailing dotted quad as two hex groups so one path handles all shapes.
-      const dotted = /(?:^|:)((?:\d{1,3}\.){3}\d{1,3})$/.exec(lower);
-      let normalized = lower;
-      if (dotted) {
-        const [hi, lo] = dotted[1].split('.').reduce<[string, string]>(
-          (acc, octet, idx) => {
-            acc[idx < 2 ? 0 : 1] += Number(octet).toString(16).padStart(2, '0');
-            return acc;
-          },
-          ['', ''],
-        );
-        normalized = lower.slice(0, dotted.index) + ':' + hi + ':' + lo;
-      }
-
-      // Expand '::' once; classification then uses fixed group indices.
-      const halves = normalized.split('::');
-      if (halves.length > 2) return false;
-      const head = halves[0] ? halves[0].split(':') : [];
-      const tail = halves[1] ? halves[1].split(':') : [];
-      if (head.concat(tail).some((g) => g && !/^[0-9a-f]{1,4}$/.test(g))) return false;
-      const fill = new Array<string>(Math.max(0, 8 - head.length - tail.length)).fill('0');
-      const groups = [...head, ...fill, ...tail].map((g) => g.padStart(4, '0'));
-      if (groups.length !== 8) return false;
-
-      // Unspecified :: and loopback ::1 (seven zero groups then 1).
-      if (groups.every((g) => g === '0000')) return true;
-      if (groups.slice(0, 7).every((g) => g === '0000')) return true;
-
-      // IPv4-mapped/compatible (::ffff:a.b.c or hex equivalent, also ::a.b.c
-      // with <6 prefix groups): the embedded IPv4 decides.
-      const nonZero = groups.filter((g) => g !== '0000');
-      if (
-        groups[5] === 'ffff' &&
-        groups.slice(0, 5).every((g) => g === '0000') &&
-        groups.slice(6).every((g) => g !== '0000')
-      ) {
-        return this.isProtectedAddress(this.compactHexv4(groups[6], groups[7]) ?? '', 4);
-      }
-      if (
-        groups.slice(0, 5).every((g) => g === '0000') &&
-        groups[5] !== 'ffff' &&
-        nonZero.length === 3
-      ) {
-        // IPv4-compatible (::a.b.c hex): deprecated but seen in the wild.
-        return this.isProtectedAddress(this.compactHexv4(groups[6], groups[7]) ?? '', 4);
-      }
-
-      const h = groups.join(':');
-      if (h.startsWith('fe8') || h.startsWith('fe9') || h.startsWith('fea') || h.startsWith('feb'))
-        return true; // fe80::/10 link-local
-      if (h.startsWith('fec')) return false; // deprecated fec0::/10 site-local: routable
-      if (h.startsWith('fc0') || h.startsWith('fd0')) {
-        // fc00::/7 ULA - first group fc00..fdff
-        return true;
-      }
-      if (h.startsWith('ff0')) return true; // multicast ff00::/8 - group ff00..ffff
-      if (h.startsWith('2002:')) {
-        // 6to4: embedded dest IPv4 = groups 2-3.
-        return this.isProtectedAddress(this.compactHexv4(groups[1], groups[2]) ?? '', 4);
-      }
-      if (h.startsWith('2001:0000')) {
-        // Teredo: client IPv4 = last two groups (flags/port ignored).
-        return this.isProtectedAddress(this.compactHexv4(groups[6], groups[7]) ?? '', 4);
-      }
-      if (h.startsWith('2001:0db8')) return true; // documentation-only 2001:db8::/32
-
-      return false; // every other global unicast v6 -> publicly routable
-    }
-
-    const parts = address.split('.').map((p) => parseInt(p, 10));
-    if (parts.length !== 4 || parts.some((p) => !Number.isFinite(p) || p < 0 || p > 255)) {
-      return false;
-    }
-    return FileHandler.PROTECTED_V4_RANGES.some(([base, bits]) =>
-      this.isProtectedIpv4(parts, base, bits),
+    if ((family !== 4 && family !== 6) || net.isIP(address) !== family) return true;
+    const type = family === 6 ? 'ipv6' : 'ipv4';
+    // BlockList also applies IPv4 rules to IPv4-mapped IPv6 addresses.
+    return (
+      protectedAddresses.check(address, type) ||
+      (family === 6 && !publicIpv6Addresses.check(address, type))
     );
-  }
-
-  private isProtectedIpv4(addr: number[], baseStr: string, prefixLen: number): boolean {
-    const base = baseStr.split('.').map((p) => parseInt(p, 10));
-    const fullBytes = Math.floor(prefixLen / 8);
-    for (let i = 0; i < fullBytes; i++) {
-      if (addr[i] !== base[i]) return false;
-    }
-    const rem = prefixLen % 8;
-    if (rem > 0) {
-      const mask = 0b11111111 << (8 - rem);
-      if ((addr[fullBytes] & mask) !== (base[fullBytes] & mask)) return false;
-    }
-    return true;
-  }
-
-  /**
-   * Convert a 4-hex-digit group pair to dotted quad ('7f00'+'0001' -> 127.0.0.1)
-   * for 6to4/Teredo embedded-v4 checks; null unless both groups are hex.
-   */
-  private compactHexv4(high: string, low?: string): string | null {
-    const groups = low === undefined ? [high.slice(0, 4), high.slice(4, 8)] : [high, low];
-    if (groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
-    const bytes = groups.flatMap((g) => [
-      parseInt(g.padStart(4, '0').slice(0, 2), 16),
-      parseInt(g.padStart(4, '0').slice(2, 4), 16),
-    ]);
-    return bytes.join('.');
   }
 
   /**
@@ -351,7 +249,26 @@ export class FileHandler {
    * via path.join(tempDir, fileName).
    */
   private sanitizeFileName(fileName: string): string {
-    return path.basename(fileName.replace(/\\/g, '/'));
+    const name = path.posix.basename(fileName.replace(/\\/g, '/'));
+    if (
+      !name ||
+      name === '.' ||
+      name === '..' ||
+      /[<>:"|?*]|[. ]$/.test(name) ||
+      [...name].some((character) => character.charCodeAt(0) < 32) ||
+      /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)
+    ) {
+      throw new Error('Invalid upload file name');
+    }
+    return name;
+  }
+
+  private writeTempFile(buffer: Buffer, fileName: string): string {
+    const filePath = this.sanitizeFilePath(
+      path.join(this.tempDir, `${crypto.randomBytes(8).toString('hex')}-${fileName}`),
+    );
+    fs.writeFileSync(filePath, buffer, { flag: 'wx' });
+    return filePath;
   }
 
   /**
@@ -367,10 +284,7 @@ export class FileHandler {
 
       // Generate filename if not provided
       const finalFileName = this.sanitizeFileName(fileName || `upload-${Date.now()}.bin`);
-      const filePath = this.sanitizeFilePath(path.join(this.tempDir, finalFileName));
-
-      // Save to file
-      fs.writeFileSync(filePath, buffer);
+      const filePath = this.writeTempFile(buffer, finalFileName);
 
       return {
         success: true,
@@ -390,9 +304,7 @@ export class FileHandler {
     try {
       // Only allow verification of files in our temp directory (same policy
       // as cleanupFile - tool-argument paths must not reach arbitrary files)
-      if (!this.isInsideTempDir(filePath)) {
-        throw new Error('Can only verify files in temp directory');
-      }
+      filePath = this.sanitizeFilePath(filePath);
 
       // Check if file exists
       if (!fs.existsSync(filePath)) {
@@ -430,12 +342,7 @@ export class FileHandler {
        * Arbitrary-read guard (see issue #380): only files inside our temp dir
        * may be read. cleanupFile enforces this; readBase64File did not.
        */
-      if (!this.isInsideTempDir(filePath)) {
-        return {
-          success: false,
-          error: 'Can only read files in temp directory',
-        };
-      }
+      filePath = this.sanitizeFilePath(filePath);
       if (!fs.existsSync(filePath)) {
         throw new Error(`File does not exist: ${filePath}`);
       }
@@ -468,9 +375,26 @@ export class FileHandler {
    * checks segment-wise against the real temp dir.
    */
   private isInsideTempDir(candidate: string): boolean {
-    const resolved = path.resolve(this.tempDir, candidate);
-    const baseWithSep = this.tempDir + path.sep;
-    return resolved.startsWith(baseWithSep);
+    const inside = (value: string) => {
+      const relative = path.relative(this.tempDir, value);
+      return (
+        relative !== '' &&
+        relative !== '..' &&
+        !relative.startsWith(`..${path.sep}`) &&
+        !path.isAbsolute(relative)
+      );
+    };
+    try {
+      if (typeof candidate !== 'string' || !candidate) return false;
+      const resolved = path.resolve(this.tempDir, candidate);
+      if (!inside(resolved)) return false;
+      const real = fs.existsSync(resolved)
+        ? fs.realpathSync(resolved)
+        : path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
+      return inside(real);
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -492,12 +416,7 @@ export class FileHandler {
   private async cleanupFile(filePath: string): Promise<any> {
     try {
       // Only allow cleanup of files in our temp directory
-      if (!this.isInsideTempDir(filePath)) {
-        return {
-          success: false,
-          error: 'Can only cleanup files in temp directory',
-        };
-      }
+      filePath = this.sanitizeFilePath(filePath);
 
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath);

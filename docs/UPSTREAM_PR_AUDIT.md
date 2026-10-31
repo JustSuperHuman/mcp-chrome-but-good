@@ -1,10 +1,42 @@
 # Upstream open pull-request audit
 
-Refreshed against `hangwin/mcp-chrome` on 2026-09-24 (initial audit 2026-08-31).
+Refreshed against `hangwin/mcp-chrome` on 2026-10-31 (initial audit 2026-08-31).
 Upstream `master` is still `f48e71751e00bc09725c7e173423cff4f2ccd12a`, already
 contained in this fork. There are no new mainline commits to merge. The fork adapts
 useful changes instead of blindly merging overlapping branches into the session-isolated
 implementation.
+
+## October refresh
+
+- Reviewed all 31 open PRs and the PRs updated since the September audit. Mainline
+  remains at `f48e71751e00bc09725c7e173423cff4f2ccd12a`; the fork contains it.
+- [#389](https://github.com/hangwin/mcp-chrome/pull/389): cherry-picked
+  `3822d3ccc3a7bf8f6f7591b01f6df681743f4af2` with attribution. File downloads now
+  reject private/local destinations and validate redirects. File names, temporary
+  reads, verification and cleanup are confined to the upload directory.
+  Review found gaps in the proposal: it checked IPv6 before falling back to IPv4,
+  resolved DNS again during fetch, missed parts of private IPv6 ranges, and followed
+  directory links. The fork checks every DNS answer, pins socket lookup to those
+  answers, uses Node's subnet checks, rejects tunnel ranges, and checks real paths.
+  Uploads use distinct, exclusively created files so repeated names cannot overwrite
+  an earlier upload. Explicit `chrome_upload_file.filePath` uploads still work directly
+  through CDP; the restrictions apply to the native temporary-file operations.
+- [#393](https://github.com/hangwin/mcp-chrome/pull/393): already covered by the
+  fork's per-session server factory and transport cleanup. Its close callback repeats
+  the recursive cleanup pattern discussed under #382 below. Retained the fork's
+  tested implementation.
+- [#390](https://github.com/hangwin/mcp-chrome/pull/390): not included. It adds a
+  third-party search service to new Claude AgentChat sessions by default, sending
+  queries and requested URLs to Parallel. This optional product feature changes the
+  fork's privacy defaults.
+- [#374](https://github.com/hangwin/mcp-chrome/pull/374) was closed without merging;
+  the fork already uses `better-sqlite3` 12. The updated #382 remains covered by the
+  September fixes.
+
+Release 1.1.1 pairs extension and bridge 1.1.1. Packaging now audits source and all
+shipped text files for Chinese text and rejects Chinese/Japanese locale directories.
+The upload regression suite also covers mixed DNS answers, socket lookup pinning,
+redirects to private hosts, IPv4-mapped IPv6, directory links and repeated names.
 
 ## September refresh
 

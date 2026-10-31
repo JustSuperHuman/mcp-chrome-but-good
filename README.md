@@ -153,6 +153,20 @@ production assets and exercises the compiled bridge over real HTTP, including
 concurrent clients and legacy SSE; its browser connection is a test double, so run
 the live checks below after reloading the browser.
 
+Packaging runs `verify:english` before building and checks every text file in the
+staged bundle again before archiving. Chinese text or Chinese/Japanese locale
+directories fail the release. To repeat all release checks after packaging:
+
+```powershell
+$env:JUSTBROWSE_RELEASE = '1'
+corepack pnpm@8.15.9 verify:release
+node scripts/verify-windows-launcher.mjs
+```
+
+Remote file uploads (`fileUrl`) require a public HTTP(S) URL; redirects and DNS
+answers are checked before connecting. To upload an existing local file, use
+`filePath`, or supply the bytes with `base64Data`.
+
 ## Connect an MCP client
 
 Streamable HTTP is the preferred transport:
