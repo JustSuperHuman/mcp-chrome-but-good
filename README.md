@@ -1,31 +1,23 @@
 # JustBrowseMCP
 
-JustBrowseMCP is a privacy-focused fork of
-[`hangwin/mcp-chrome`](https://github.com/hangwin/mcp-chrome) for controlling your
-existing Chrome browser through the Model Context Protocol (MCP). It keeps the
-upstream extension-and-native-host architecture while adding per-client tab
-ownership, background-first browser work, and screenshots that are returned as
-native MCP image content.
+## Key differences from upstream
 
-The project is intended for agents that must use an existing signed-in browser
-without taking over the tab or window a person is actively using.
+| Area                     | Upstream [`hangwin/mcp-chrome`](https://github.com/hangwin/mcp-chrome)                         | JustBrowseMCP                                                                                                                                                                                                                   |
+| ------------------------ | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Multiple agents          | Shares one MCP server across transports, with no per-client tab ownership.                     | Each connection gets its own MCP server and persistent tab leases. Clients cannot access, close or move another session's tabs.                                                                                                 |
+| Working alongside you    | Tab switching changes the active browser tab; tools commonly default to the user's active tab. | Background-first navigation, inspection, actions and screenshots. Logical tab switching keeps your active tab and window in place.                                                                                              |
+| Screenshots              | Saves images or returns base64 data inside JSON text.                                          | Returns native MCP image content for viewport, full-page, element and `chrome_computer` screenshots.                                                                                                                            |
+| Tab and network control  | Network requests use the active tab's context; no `chrome_move_tab` tool.                      | Requests target a session-owned tab's context. Move tabs between windows while preserving their state, with no destination focus by default.                                                                                    |
+| Installation and updates | Download the extension, install/register the bridge and configure MCP clients separately.      | One-line installers handle the extension, bridge, agent skill and Claude Code/Codex MCP entries. Release builds keep a stable extension ID and register Chrome, Chromium, Edge and Brave.                                       |
+| Language                 | Includes Chinese/Japanese locales and untranslated Chinese UI, comments and docs.              | English is the default. UI text, logs, comments, prompts and docs are translated; Chinese/Japanese locales are removed. Packaging rejects Chinese text in source and shipped text files.                                        |
+| Reliability and security | Several transport and security fixes remain in open upstream PRs.                              | Includes session cleanup and expiry, stdio reconnection, extension-aware health checks, stricter HTTP origin validation and hardened file downloads. The [upstream audit](docs/UPSTREAM_PR_AUDIT.md) records the adopted fixes. |
 
-## What this fork changes
-
-- One MCP server instance and private browser-session identity per transport.
-- Session-owned tab leases, persisted across extension service-worker suspension.
-- Logical tab switching that does not activate a Chrome tab or focus its window.
-- Background-first navigation, page inspection, computer actions, and screenshots.
-- Collapsed `JustBrowse <session>` tab groups for inactive session tabs.
-- Cross-session protection for tab access, tab closing, and tab moves.
-- `chrome_move_tab` for state-preserving moves between windows or into a new window.
-- Tab-targeted `chrome_network_request` calls that retain the selected tab's browser
-  context.
-- Direct MCP image results for viewport, full-page, element, and
-  `chrome_computer` screenshots.
-- Streamable HTTP lifecycle cleanup, idle-session expiry, stdio reconnection, a real
-  extension-aware `/ping`, and optional host/port overrides.
-- Native-host registration for the JustBrowse and supported upstream extension IDs.
+Both projects control your existing, signed-in Chrome browser through the Model
+Context Protocol (MCP), using a browser extension and native host. JustBrowseMCP
+focuses on running multiple agents alongside your own browsing. Inactive session
+tabs stay in collapsed `JustBrowse <session>` groups, and tab ownership survives
+extension service-worker suspension. The bridge also supports optional host/port
+overrides and authorizes the JustBrowse and supported upstream extension IDs.
 
 See [the research and target design](docs/RESEARCH.md),
 [the architecture note](docs/JUSTBROWSE_ARCHITECTURE.md),
