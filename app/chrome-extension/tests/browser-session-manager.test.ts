@@ -131,4 +131,59 @@ describe('BrowserSessionManager', () => {
     expect(released.isError).toBe(false);
     expect(adopted.immediateResult).toBeUndefined();
   });
+
+  it('does not persist or regroup unchanged ownership after repeated tool calls', async () => {
+    const { browserSessionManager } =
+      await import('@/entrypoints/background/tools/browser-session-manager');
+    await browserSessionManager.prepare('session-a', 'chrome_click_element', { tabId: 42 });
+    vi.clearAllMocks();
+    for (let index = 0; index < 100; index++) {
+      const prepared = await browserSessionManager.prepare('session-a', 'chrome_screenshot', {});
+      expect(prepared.args.tabId).toBe(42);
+      await browserSessionManager.recordResult('session-a', 'chrome_screenshot', prepared.args, {
+        content: [],
+        isError: false,
+      });
+    }
+    expect(chrome.storage.session.set).not.toHaveBeenCalled();
+    expect(chrome.tabs.get).not.toHaveBeenCalled();
+    expect(chrome.tabs.group).not.toHaveBeenCalled();
+    expect(chrome.tabGroups.update).not.toHaveBeenCalled();
+    expect(
+      (await browserSessionManager.prepare('session-b', 'chrome_screenshot', { tabId: 42 }))
+        .immediateResult?.isError,
+    ).toBe(true);
+  });
+
+  it('still persists logical selection when accessing a different owned tab', async () => {
+    const { browserSessionManager } =
+      await import('@/entrypoints/background/tools/browser-session-manager');
+    await browserSessionManager.prepare('session-a', 'chrome_click_element', { tabId: 41 });
+    await browserSessionManager.prepare('session-a', 'chrome_click_element', { tabId: 42 });
+    vi.clearAllMocks();
+    await browserSessionManager.recordResult(
+      'session-a',
+      'chrome_read_page',
+      { tabId: 41 },
+      { content: [], isError: false },
+    );
+    expect(chrome.storage.session.set).toHaveBeenCalled();
+    expect(
+      (await browserSessionManager.prepare('session-a', 'chrome_read_page', {})).args.tabId,
+    ).toBe(41);
+  });
+
+  it('does not persist unrelated user tab removal and replacement events', async () => {
+    const { browserSessionManager } =
+      await import('@/entrypoints/background/tools/browser-session-manager');
+    await browserSessionManager.prepare('session-a', 'chrome_click_element', { tabId: 42 });
+    const removed = (chrome.tabs.onRemoved.addListener as any).mock.calls.at(-1)[0];
+    const replaced = (chrome.tabs.onReplaced.addListener as any).mock.calls.at(-1)[0];
+    vi.clearAllMocks();
+    removed(99);
+    replaced(100, 99);
+    // Await the serialized mutation queue through a subsequent release operation.
+    await browserSessionManager.releaseSession('absent-session');
+    expect(chrome.storage.session.set).not.toHaveBeenCalled();
+  });
 });

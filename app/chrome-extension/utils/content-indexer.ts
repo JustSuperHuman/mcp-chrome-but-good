@@ -26,7 +26,10 @@ export class ContentIndexer {
   private isInitialized = false;
   private isInitializing = false;
   private initPromise: Promise<void> | null = null;
-  private indexedPages = new Set<string>();
+  private indexedPages = new Map<number, string>();
+  private tabListenersInstalled = false;
+  private pendingIndexes = new Map<number, ReturnType<typeof setTimeout>>();
+  private indexingVersions = new Map<number, object>();
   private readonly options: Required<IndexingOptions>;
 
   constructor(options?: IndexingOptions) {
@@ -140,15 +143,19 @@ export class ContentIndexer {
       await this.initialize();
     }
 
+    const version = {};
+    this.indexingVersions.set(tabId, version);
+    const isCurrent = () => this.indexingVersions.get(tabId) === version;
     try {
       const tab = await chrome.tabs.get(tabId);
+      if (!isCurrent()) return;
       if (!tab.url || !this.shouldIndexUrl(tab.url)) {
         console.log(`ContentIndexer: Skipping tab ${tabId} - URL not indexable`);
         return;
       }
 
       const pageKey = `${tab.url}_${tab.title}`;
-      if (this.options.skipDuplicates && this.indexedPages.has(pageKey)) {
+      if (this.options.skipDuplicates && this.indexedPages.get(tabId) === pageKey) {
         console.log(`ContentIndexer: Skipping tab ${tabId} - already indexed`);
         return;
       }
@@ -156,6 +163,7 @@ export class ContentIndexer {
       console.log(`ContentIndexer: Starting to index tab ${tabId}: ${tab.title}`);
 
       const content = await this.extractTabContent(tabId);
+      if (!isCurrent()) return;
       if (!content) {
         console.log(`ContentIndexer: No content extracted from tab ${tabId}`);
         return;
@@ -172,8 +180,10 @@ export class ContentIndexer {
       }
 
       for (const chunk of chunksToIndex) {
+        if (!isCurrent()) return;
         try {
           const embedding = await this.semanticEngine.getEmbedding(chunk.text);
+          if (!isCurrent()) return;
           const label = await this.vectorDatabase.addDocument(
             tabId,
             tab.url!,
@@ -187,13 +197,15 @@ export class ContentIndexer {
         }
       }
 
-      this.indexedPages.add(pageKey);
+      if (isCurrent()) this.indexedPages.set(tabId, pageKey);
 
       console.log(
         `ContentIndexer: Successfully indexed ${chunksToIndex.length} chunks for tab ${tabId}`,
       );
     } catch (error) {
       console.error(`ContentIndexer: Failed to index tab ${tabId}:`, error);
+    } finally {
+      if (isCurrent()) this.indexingVersions.delete(tabId);
     }
   }
 
@@ -254,18 +266,15 @@ export class ContentIndexer {
    * Remove tab index
    */
   public async removeTabIndex(tabId: number): Promise<void> {
+    this.cancelPendingIndex(tabId);
+    this.indexingVersions.delete(tabId);
+    this.indexedPages.delete(tabId);
     if (!this.isInitialized) {
       return;
     }
 
     try {
       await this.vectorDatabase.removeTabDocuments(tabId);
-
-      for (const pageKey of this.indexedPages) {
-        if (pageKey.includes(`tab_${tabId}_`)) {
-          this.indexedPages.delete(pageKey);
-        }
-      }
 
       console.log(`ContentIndexer: Removed index for tab ${tabId}`);
     } catch (error) {
@@ -314,6 +323,8 @@ export class ContentIndexer {
    */
   public async reinitialize(): Promise<void> {
     console.log('ContentIndexer: Reinitializing for model switch...');
+    this.indexingVersions.clear();
+    for (const tabId of this.pendingIndexes.keys()) this.cancelPendingIndex(tabId);
 
     this.isInitialized = false;
     this.isInitializing = false;
@@ -491,6 +502,7 @@ export class ContentIndexer {
 
     try {
       await this.vectorDatabase.clear();
+      this.indexingVersions.clear();
       this.indexedPages.clear();
       console.log('ContentIndexer: All indexes cleared');
     } catch (error) {
@@ -498,9 +510,19 @@ export class ContentIndexer {
     }
   }
   private setupTabEventListeners(): void {
+    if (this.tabListenersInstalled) return;
+    this.tabListenersInstalled = true;
     chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-      if (this.options.autoIndex && changeInfo.status === 'complete' && tab.url) {
-        setTimeout(() => {
+      if (changeInfo.status === 'loading') this.cancelPendingIndex(tabId);
+      if (
+        this.options.autoIndex &&
+        changeInfo.status === 'complete' &&
+        tab.url &&
+        this.shouldIndexUrl(tab.url)
+      ) {
+        this.cancelPendingIndex(tabId);
+        const timer = setTimeout(() => {
+          this.pendingIndexes.delete(tabId);
           if (!this.isSemanticEngineReady() && !this.isSemanticEngineInitializing()) {
             console.log(
               `ContentIndexer: Skipping auto-index for tab ${tabId} - semantic engine not ready`,
@@ -512,6 +534,7 @@ export class ContentIndexer {
             console.error(`ContentIndexer: Auto-indexing failed for tab ${tabId}:`, error);
           });
         }, 2000);
+        this.pendingIndexes.set(tabId, timer);
       }
     });
 
@@ -526,6 +549,12 @@ export class ContentIndexer {
         }
       });
     }
+  }
+
+  private cancelPendingIndex(tabId: number): void {
+    const timer = this.pendingIndexes.get(tabId);
+    if (timer !== undefined) clearTimeout(timer);
+    this.pendingIndexes.delete(tabId);
   }
 
   private shouldIndexUrl(url: string): boolean {

@@ -6,6 +6,39 @@ Releases are published on GitHub:
 installers in the [README](../README.md#install) download the newest and check it against
 `SHA256SUMS`. `node scripts/package-release.mjs` builds them.
 
+## 1.1.2 — 2026-10-31
+
+Extension **1.1.2** pairs with native bridge **1.1.2**.
+
+- Native messages use a chunk queue instead of repeatedly copying a partially
+  received message. A controlled 4 MB message split into 4 KB fragments required
+  about 2 GB of copying before this change and 4 MB afterward.
+- Repeated tool calls on the current session tab reuse its lease and group. They
+  no longer rewrite the full session state or regroup the tab after every call.
+  Closing unrelated user tabs also leaves session storage alone.
+- The automation scheduler backs off polling when its queue is empty. Explicit
+  enqueue/completion notifications still run immediately; the default fallback
+  polling delay is capped at the 7.5-second lease-reclaim interval.
+- Content indexing keeps one page-cache entry per tab, clears it on removal,
+  cancels pending work on navigation/close, and installs listeners once across
+  model changes. Repeated page-completion events share one deferred indexing task.
+- Production scripts are minified. The extension uses the bro arm icon at actual
+  toolbar sizes: all five icon files together are about 39 KB, down from 1 MB.
+  The extension name and popup title now read JustBrowseMCP.
+
+If reloading still shows Chinese text, check the extension's version. The old
+development folder can still contain a 1.0.1 build with `zh_CN` as its default
+locale. Update through the installer or rebuild that folder, then reload the
+extension; reloading alone does not rebuild its files.
+
+Validation: 669 extension tests and 146 native tests pass. Release, HTTP/SSE and
+Windows launcher checks pass, including a real-pipe test with a fragmented 1 MB
+payload and 350 responses. All 96 shipped scripts parse; the two archives contain
+the same 222 files and pass SHA-256 checks. Production JavaScript totals 7.1 MB,
+down from 12.3 MB. A clean bundle dependency install, CLI version check and SQLite
+query pass. The loaded Edge extension was reloaded and verified as 1.1.2 with an
+English popup and the bro icon.
+
 ## 1.1.1 — 2026-10-31
 
 Extension **1.1.1** pairs with native bridge **1.1.1**.

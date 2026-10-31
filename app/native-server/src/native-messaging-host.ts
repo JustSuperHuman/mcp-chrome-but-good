@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { NativeMessageType } from 'chrome-mcp-shared';
 import { TIMEOUTS } from './constant';
 import fileHandler from './file-handler';
+import { NativeMessageReader } from './native-message-reader';
 
 interface PendingRequest {
   resolve: (value: any) => void;
@@ -29,36 +30,22 @@ export class NativeMessagingHost {
   }
 
   private setupMessageHandling(): void {
-    let buffer = Buffer.alloc(0);
-    let expectedLength = -1;
+    const reader = new NativeMessageReader();
+    let continuationScheduled = false;
     const MAX_MESSAGES_PER_TICK = 100; // Safety guard to avoid long-running loops per readable tick
-    const MAX_MESSAGE_SIZE_BYTES = 16 * 1024 * 1024; // 16MB upper bound for a single message
 
     const processAvailable = () => {
+      continuationScheduled = false;
       let processed = 0;
       while (processed < MAX_MESSAGES_PER_TICK) {
-        // Read length header when needed
-        if (expectedLength === -1) {
-          if (buffer.length < 4) break; // not enough for header
-          expectedLength = buffer.readUInt32LE(0);
-          buffer = buffer.slice(4);
-
-          // Validate length header
-          if (expectedLength <= 0 || expectedLength > MAX_MESSAGE_SIZE_BYTES) {
-            this.sendError(`Invalid message length: ${expectedLength}`);
-            // Reset state to resynchronize stream
-            expectedLength = -1;
-            buffer = Buffer.alloc(0);
-            break;
-          }
+        let messageBuffer: Buffer | null;
+        try {
+          messageBuffer = reader.readMessage();
+        } catch (error: any) {
+          this.sendError(error.message);
+          break;
         }
-
-        // Wait for complete body
-        if (buffer.length < expectedLength) break;
-
-        const messageBuffer = buffer.slice(0, expectedLength);
-        buffer = buffer.slice(expectedLength);
-        expectedLength = -1;
+        if (!messageBuffer) break;
         processed++;
 
         try {
@@ -70,7 +57,8 @@ export class NativeMessagingHost {
       }
 
       // If we hit the cap but still have at least one complete message pending, schedule to continue soon
-      if (processed === MAX_MESSAGES_PER_TICK) {
+      if (processed === MAX_MESSAGES_PER_TICK && reader.hasPendingData) {
+        continuationScheduled = true;
         setImmediate(processAvailable);
       }
     };
@@ -78,9 +66,9 @@ export class NativeMessagingHost {
     stdin.on('readable', () => {
       let chunk;
       while ((chunk = stdin.read()) !== null) {
-        buffer = Buffer.concat([buffer, chunk]);
-        processAvailable();
+        reader.append(chunk);
       }
+      if (!continuationScheduled) processAvailable();
     });
 
     stdin.on('end', () => {

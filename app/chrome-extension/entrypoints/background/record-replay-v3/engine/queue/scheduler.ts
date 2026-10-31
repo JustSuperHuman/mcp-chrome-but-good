@@ -39,6 +39,9 @@ export interface RunSchedulerTuning {
    */
   pollIntervalMs?: number;
 
+  /** Upper bound for idle polling backoff. Enqueue/completion kicks stay immediate. */
+  maxIdlePollIntervalMs?: number;
+
   /**
    * Minimum interval between lease reclaim scans.
    * Set to 0 to disable periodic reclaim (not recommended in production).
@@ -139,7 +142,15 @@ export function createRunScheduler(deps: RunSchedulerDeps): RunScheduler {
   );
 
   let started = false;
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  const maxIdlePollIntervalMs = Math.max(
+    pollIntervalMs,
+    Math.min(
+      clampNonNegativeInt(deps.tuning?.maxIdlePollIntervalMs ?? 30_000, 30_000),
+      reclaimIntervalMs > 0 ? reclaimIntervalMs : 30_000,
+    ),
+  );
+  let nextPollDelayMs = pollIntervalMs;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let releaseKeepalive: (() => void) | null = null;
 
   const activeRunIds = new Set<RunId>();
@@ -245,7 +256,19 @@ export function createRunScheduler(deps: RunSchedulerDeps): RunScheduler {
       }
     } finally {
       pumpPromise = null;
+      schedulePoll();
     }
+  }
+
+  function schedulePoll(): void {
+    if (!started || pollIntervalMs === 0) return;
+    if (pollTimer) clearTimeout(pollTimer);
+    const delay = activeRunIds.size > 0 ? pollIntervalMs : nextPollDelayMs;
+    pollTimer = setTimeout(() => {
+      pollTimer = null;
+      void requestKick(false);
+    }, delay);
+    nextPollDelayMs = Math.min(delay * 2, maxIdlePollIntervalMs);
   }
 
   function start(): void {
@@ -266,12 +289,6 @@ export function createRunScheduler(deps: RunSchedulerDeps): RunScheduler {
       logger.warn('[RunScheduler] startHeartbeat failed:', e);
     }
 
-    if (pollIntervalMs > 0) {
-      pollTimer = setInterval(() => {
-        void kick();
-      }, pollIntervalMs);
-    }
-
     void kick();
   }
 
@@ -287,7 +304,7 @@ export function createRunScheduler(deps: RunSchedulerDeps): RunScheduler {
     started = false;
 
     if (pollTimer) {
-      clearInterval(pollTimer);
+      clearTimeout(pollTimer);
       pollTimer = null;
     }
 
@@ -309,7 +326,16 @@ export function createRunScheduler(deps: RunSchedulerDeps): RunScheduler {
   }
 
   function kick(): Promise<void> {
+    return requestKick(true);
+  }
+
+  function requestKick(resetBackoff: boolean): Promise<void> {
     if (!started) return Promise.resolve();
+    if (resetBackoff) nextPollDelayMs = pollIntervalMs;
+    if (pollTimer) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
 
     pendingKick = true;
     if (!pumpPromise) {

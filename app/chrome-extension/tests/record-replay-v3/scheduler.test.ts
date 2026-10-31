@@ -7,7 +7,7 @@
  * - Reclaim interval is respected
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type {
   RunQueueConfig,
@@ -92,6 +92,72 @@ function createKeepaliveProbe(): {
 // ==================== Tests ====================
 
 describe('V3 RunScheduler', () => {
+  it('backs off empty polling but processes explicitly enqueued work immediately', async () => {
+    vi.useFakeTimers();
+    const pending: RunQueueItem[] = [];
+    const claimNext = vi.fn(async () => pending.shift() ?? null);
+    const execute = vi.fn(async () => {});
+    const scheduler = createRunScheduler({
+      queue: { claimNext, markDone: async () => {} },
+      leaseManager: {
+        startHeartbeat() {},
+        stopHeartbeat() {},
+        reclaimExpiredLeases: async () => [],
+      },
+      keepalive: noopKeepalive,
+      config: { maxParallelRuns: 3, leaseTtlMs: 15000, heartbeatIntervalMs: 5000 },
+      ownerId: 'idle-test',
+      execute,
+      logger: createSilentLogger(),
+    });
+    try {
+      scheduler.start();
+      await scheduler.kick();
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(claimNext.mock.calls.length).toBeLessThan(16);
+      const beforeEnqueue = Date.now();
+      pending.push(makeClaimedItem('run-after-idle'));
+      await scheduler.kick();
+      expect(execute).toHaveBeenCalledWith(expect.objectContaining({ id: 'run-after-idle' }));
+      expect(Date.now()).toBe(beforeEnqueue);
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      scheduler.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+      vi.useRealTimers();
+    }
+  });
+
+  it('still discovers queued work without a kick within the lease reclaim interval', async () => {
+    vi.useFakeTimers();
+    const pending: RunQueueItem[] = [];
+    const execute = vi.fn(async () => {});
+    const scheduler = createRunScheduler({
+      queue: { claimNext: async () => pending.shift() ?? null, markDone: async () => {} },
+      leaseManager: {
+        startHeartbeat() {},
+        stopHeartbeat() {},
+        reclaimExpiredLeases: async () => [],
+      },
+      keepalive: noopKeepalive,
+      config: { maxParallelRuns: 1, leaseTtlMs: 15000, heartbeatIntervalMs: 5000 },
+      ownerId: 'fallback-test',
+      execute,
+      logger: createSilentLogger(),
+    });
+    try {
+      scheduler.start();
+      await scheduler.kick();
+      await vi.advanceTimersByTimeAsync(60000);
+      pending.push(makeClaimedItem('fallback-run'));
+      await vi.advanceTimersByTimeAsync(7500);
+      expect(execute).toHaveBeenCalledWith(expect.objectContaining({ id: 'fallback-run' }));
+    } finally {
+      scheduler.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   describe('maxParallelRuns enforcement', () => {
     it('enforces maxParallelRuns and backfills when a run finishes', async () => {
       const config: RunQueueConfig = {

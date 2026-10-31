@@ -242,13 +242,26 @@ class BrowserSessionManager {
       }
     }
 
-    for (const tabId of tabIds) await this.claimTab(sessionId, tabId);
+    for (const tabId of tabIds) {
+      const session = this.state.sessions[sessionId];
+      // Read/click/screenshot calls on the current leased tab do not change its
+      // owner, logical selection or group. Avoid Chrome IPC and full-state writes.
+      if (
+        this.state.tabOwners[String(tabId)] === sessionId &&
+        session?.logicalActiveTabId === tabId &&
+        name !== TOOL_NAMES.BROWSER.NAVIGATE &&
+        name !== TOOL_NAMES.BROWSER.MOVE_TAB
+      )
+        continue;
+      await this.claimTab(sessionId, tabId);
+    }
   }
 
   async releaseSession(sessionId: string): Promise<ToolResult> {
     await this.ensureInitialized();
     const releasedTabIds = [...(this.state.sessions[sessionId]?.tabIds ?? [])];
     await this.mutate(() => {
+      if (!this.state.sessions[sessionId]) return false;
       for (const tabId of releasedTabIds) {
         if (this.state.tabOwners[String(tabId)] === sessionId) {
           delete this.state.tabOwners[String(tabId)];
@@ -272,7 +285,8 @@ class BrowserSessionManager {
         }),
       )
     ).filter((tab): tab is chrome.tabs.Tab => tab !== null && typeof tab.id === 'number');
-    const stale = session.tabIds.filter((tabId) => !liveTabs.some((tab) => tab.id === tabId));
+    const liveTabIds = new Set(liveTabs.map((tab) => tab.id));
+    const stale = session.tabIds.filter((tabId) => !liveTabIds.has(tabId));
     if (stale.length > 0) await this.removeTabs(stale);
 
     const windows = new Map<number, Array<Record<string, unknown>>>();
@@ -387,10 +401,10 @@ class BrowserSessionManager {
     await this.initialized;
   }
 
-  private async mutate(operation: () => void): Promise<void> {
+  private async mutate(operation: () => void | boolean): Promise<void> {
     await this.ensureInitialized();
     const run = async () => {
-      operation();
+      if (operation() === false) return;
       await chrome.storage.session.set({ [STORAGE_KEY]: this.state });
     };
     this.mutationQueue = this.mutationQueue.then(run, run);
@@ -400,10 +414,12 @@ class BrowserSessionManager {
   private async removeTabs(tabIds: number[]): Promise<void> {
     if (tabIds.length === 0) return;
     await this.mutate(() => {
+      let changed = false;
       for (const tabId of tabIds) {
         const owner = this.state.tabOwners[String(tabId)];
         delete this.state.tabOwners[String(tabId)];
         if (!owner) continue;
+        changed = true;
         const session = this.state.sessions[owner];
         if (!session) continue;
         session.tabIds = session.tabIds.filter((id) => id !== tabId);
@@ -412,13 +428,14 @@ class BrowserSessionManager {
         }
         session.updatedAt = Date.now();
       }
+      return changed;
     });
   }
 
   private async replaceTab(removedTabId: number, addedTabId: number): Promise<void> {
     await this.mutate(() => {
       const owner = this.state.tabOwners[String(removedTabId)];
-      if (!owner) return;
+      if (!owner) return false;
       delete this.state.tabOwners[String(removedTabId)];
       this.state.tabOwners[String(addedTabId)] = owner;
       const session = this.state.sessions[owner];

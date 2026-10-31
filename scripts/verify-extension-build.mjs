@@ -14,6 +14,7 @@ const pkg = JSON.parse(await readFile(resolve(extension, 'package.json'), 'utf8'
 assert.equal(manifest.manifest_version, 3);
 assert.equal(manifest.version, pkg.version);
 assert.equal(manifest.default_locale, 'en');
+assert.equal(manifest.action.default_title, 'JustBrowseMCP');
 if (release) {
   assert.ok(manifest.key, 'a release build carries the JustBrowse key (a stable extension ID)');
   const extensionId = createHash('sha256')
@@ -78,6 +79,20 @@ for (const reference of referenced) {
   const path = resolve(output, reference.replace(/^\//, ''));
   assert.ok(path.startsWith(`${output}${sep}`), `Asset escapes extension: ${reference}`);
   assert.ok((await stat(path)).size > 0, `Missing/empty entrypoint: ${reference}`);
+}
+for (const [size, reference] of Object.entries(manifest.icons)) {
+  const bytes = await readFile(resolve(output, reference));
+  assert.equal(bytes.subarray(1, 4).toString(), 'PNG', `Invalid icon: ${reference}`);
+  assert.equal(
+    bytes.readUInt32BE(16),
+    Number(size),
+    `Icon width does not match manifest: ${reference}`,
+  );
+  assert.equal(
+    bytes.readUInt32BE(20),
+    Number(size),
+    `Icon height does not match manifest: ${reference}`,
+  );
 }
 const locale = JSON.parse(
   await readFile(resolve(output, '_locales', manifest.default_locale, 'messages.json'), 'utf8'),
