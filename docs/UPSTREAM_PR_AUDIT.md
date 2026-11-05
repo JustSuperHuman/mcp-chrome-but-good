@@ -95,6 +95,8 @@ cleanup. Extension 1.0.1 packages the existing isolation behavior alongside brid
 | [#281](https://github.com/hangwin/mcp-chrome/pull/281) | Skip                            | Claude-specific environment loading is outside the bridge path and its Windows host-script behavior is explicitly unverified.                                                            |
 
 Additional lifecycle hardening was added from the discussion on #346: inactive
-Streamable HTTP sessions expire after 30 minutes (configurable with
+Streamable HTTP sessions expire after 4 hours (configurable with
 `CHROME_MCP_SESSION_IDLE_MS`), and ending sessions release extension-side tab ownership
-so abandoned clients cannot permanently reserve tabs.
+so abandoned clients cannot permanently reserve tabs. A client that returns with an
+expired session ID, or one from before a bridge restart, is resumed under the same ID
+instead of being rejected.

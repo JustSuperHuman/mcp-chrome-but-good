@@ -235,7 +235,7 @@ their actual MIME type and dimensions.
 | `CHROME_MCP_PORT`            | Native host and MCP listener port                             | `12306`       |
 | `MCP_HTTP_PORT`              | Backward-compatible port override                             | `12306`       |
 | `CHROME_MCP_HOST`            | Host used in MCP URLs passed to the built-in agent engines    | `127.0.0.1`   |
-| `CHROME_MCP_SESSION_IDLE_MS` | Streamable HTTP session idle timeout in milliseconds          | `1800000`     |
+| `CHROME_MCP_SESSION_IDLE_MS` | Idle time before a session frees its tabs, in milliseconds    | `14400000`    |
 | `CHROME_MCP_NODE_PATH`       | Absolute Node executable override for the native-host wrapper | auto-detected |
 
 ## Verification

@@ -32,6 +32,11 @@ import { ClaudeEngine } from '../agent/engines/claude';
 import { closeDb } from '../agent/db';
 import { registerAgentRoutes } from './routes';
 import { isOriginAllowed } from './cors-origin';
+import {
+  isResumableSessionId,
+  markSessionInitialized,
+  SESSION_NOT_FOUND_BODY,
+} from './mcp-session';
 
 // ============================================================
 // Types
@@ -39,6 +44,11 @@ import { isOriginAllowed } from './cors-origin';
 
 interface ExtensionRequestPayload {
   data?: unknown;
+}
+
+function readSessionId(request: FastifyRequest): string | undefined {
+  const value = request.headers['mcp-session-id'];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 // ============================================================
@@ -258,46 +268,20 @@ export class Server {
 
     // MCP POST endpoint
     this.fastify.post('/mcp', async (request, reply) => {
-      const sessionId = request.headers['mcp-session-id'] as string | undefined;
-      let transport: StreamableHTTPServerTransport | undefined = this.transportsMap.get(
-        sessionId || '',
-      ) as StreamableHTTPServerTransport;
+      const sessionId = readSessionId(request);
+      let transport = sessionId ? this.getStreamableSession(sessionId) : undefined;
 
-      if (transport) {
-        // Transport found, proceed
-      } else if (!sessionId && isInitializeRequest(request.body)) {
-        const newSessionId = randomUUID();
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => newSessionId,
-          onsessioninitialized: (initializedSessionId) => {
-            if (transport && initializedSessionId === newSessionId) {
-              this.transportsMap.set(initializedSessionId, transport);
-              this.touchStreamableSession(initializedSessionId, transport);
-            }
-          },
-        });
-
-        const server = createMcpServer({
-          sessionId: newSessionId,
-          transport: 'streamable-http',
-        });
-
-        let sessionClosed = false;
-        transport.onclose = () => {
-          if (sessionClosed) return;
-          sessionClosed = true;
-          if (transport?.sessionId && this.transportsMap.get(transport.sessionId)) {
-            this.transportsMap.delete(transport.sessionId);
-          }
-          this.clearSessionIdleTimer(newSessionId);
-          void this.releaseBrowserSession(newSessionId);
-          // The SDK clears the server's transport after this callback returns.
-          // Calling server.close() here would close the same transport recursively.
-        };
-        await server.connect(transport);
-      } else {
-        reply.code(HTTP_STATUS.BAD_REQUEST).send({ error: ERROR_MESSAGES.INVALID_MCP_REQUEST });
-        return;
+      if (!transport) {
+        if (isInitializeRequest(request.body)) {
+          // A client starting over may still send its old session ID. Give it a new session.
+          transport = await this.openStreamableSession();
+        } else if (sessionId) {
+          transport = await this.resumeStreamableSession(sessionId);
+          if (!transport) return this.sendSessionNotFound(reply);
+        } else {
+          reply.code(HTTP_STATUS.BAD_REQUEST).send({ error: ERROR_MESSAGES.INVALID_MCP_REQUEST });
+          return;
+        }
       }
 
       this.handOffResponse(reply);
@@ -314,22 +298,25 @@ export class Server {
         }
       }
 
-      if (sessionId && transport) this.touchStreamableSession(sessionId, transport);
+      const activeSessionId = transport.sessionId;
+      if (activeSessionId && this.transportsMap.get(activeSessionId) === transport) {
+        this.touchStreamableSession(activeSessionId, transport);
+      }
     });
 
     // MCP GET endpoint (SSE stream)
     this.fastify.get('/mcp', async (request, reply) => {
-      const sessionId = request.headers['mcp-session-id'] as string | undefined;
-      const transport = sessionId
-        ? (this.transportsMap.get(sessionId) as StreamableHTTPServerTransport)
-        : undefined;
-
-      if (!transport) {
+      const sessionId = readSessionId(request);
+      if (!sessionId) {
         reply.code(HTTP_STATUS.BAD_REQUEST).send({ error: ERROR_MESSAGES.INVALID_SSE_SESSION });
         return;
       }
 
-      this.touchStreamableSession(sessionId as string, transport);
+      const transport =
+        this.getStreamableSession(sessionId) ?? (await this.resumeStreamableSession(sessionId));
+      if (!transport) return this.sendSessionNotFound(reply);
+
+      this.touchStreamableSession(sessionId, transport);
       // StreamableHTTPServerTransport owns the raw response, including SSE
       // headers and its lifecycle. Fastify must not write a second response.
       this.handOffResponse(reply);
@@ -348,13 +335,19 @@ export class Server {
 
     // MCP DELETE endpoint
     this.fastify.delete('/mcp', async (request, reply) => {
-      const sessionId = request.headers['mcp-session-id'] as string | undefined;
-      const transport = sessionId
-        ? (this.transportsMap.get(sessionId) as StreamableHTTPServerTransport)
-        : undefined;
-
-      if (!transport) {
+      const sessionId = readSessionId(request);
+      if (!sessionId) {
         reply.code(HTTP_STATUS.BAD_REQUEST).send({ error: ERROR_MESSAGES.INVALID_SESSION_ID });
+        return;
+      }
+
+      const transport = this.getStreamableSession(sessionId);
+      if (!transport) {
+        if (!isResumableSessionId(sessionId)) return this.sendSessionNotFound(reply);
+        // The session already expired here (idle or a bridge restart). Ending it still has to
+        // free the tabs Chrome holds for it, which outlive both.
+        await this.releaseBrowserSession(sessionId);
+        reply.code(HTTP_STATUS.OK).send();
         return;
       }
 
@@ -375,6 +368,78 @@ export class Server {
         }
       }
     });
+  }
+
+  private getStreamableSession(sessionId: string): StreamableHTTPServerTransport | undefined {
+    return this.transportsMap.get(sessionId) as StreamableHTTPServerTransport | undefined;
+  }
+
+  /**
+   * Build a Streamable HTTP transport for one session ID. The caller connects it to a new MCP
+   * server, either before `initialize` (new session) or already initialized (resumed session).
+   */
+  private createStreamableTransport(sessionId: string): StreamableHTTPServerTransport {
+    const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => sessionId,
+      onsessioninitialized: (initializedSessionId) => {
+        if (initializedSessionId !== sessionId) return;
+        this.transportsMap.set(sessionId, transport);
+        this.touchStreamableSession(sessionId, transport);
+      },
+    });
+
+    let sessionClosed = false;
+    transport.onclose = () => {
+      if (sessionClosed) return;
+      sessionClosed = true;
+      // A resumed transport may already own this session ID; leave it and its tabs alone.
+      const current = this.transportsMap.get(sessionId);
+      if (current && current !== transport) return;
+      this.transportsMap.delete(sessionId);
+      this.clearSessionIdleTimer(sessionId);
+      void this.releaseBrowserSession(sessionId);
+      // The SDK clears the server's transport after this callback returns.
+      // Calling server.close() here would close the same transport recursively.
+    };
+    return transport;
+  }
+
+  private async openStreamableSession(): Promise<StreamableHTTPServerTransport> {
+    const sessionId = randomUUID();
+    const transport = this.createStreamableTransport(sessionId);
+    await createMcpServer({ sessionId, transport: 'streamable-http' }).connect(transport);
+    return transport;
+  }
+
+  /**
+   * Rebuild a session the client still holds but this bridge has dropped, after an idle timeout
+   * or a restart. Answering 400 or 404 instead leaves recovery to the client, and some MCP
+   * clients (Codex among them) then fail every browser call until they are restarted.
+   */
+  private async resumeStreamableSession(
+    sessionId: string,
+  ): Promise<StreamableHTTPServerTransport | undefined> {
+    if (!isResumableSessionId(sessionId)) return undefined;
+
+    const transport = this.createStreamableTransport(sessionId);
+    if (!markSessionInitialized(transport, sessionId)) {
+      console.warn(
+        `[JustBrowse] This MCP SDK cannot resume session ${sessionId}; asking the client to reconnect`,
+      );
+      return undefined;
+    }
+
+    // Register before the first await, so parallel calls from the same client share this
+    // transport. connect() wires the message handlers before it awaits, so they can use it.
+    this.transportsMap.set(sessionId, transport);
+    this.touchStreamableSession(sessionId, transport);
+    await createMcpServer({ sessionId, transport: 'streamable-http' }).connect(transport);
+    console.warn(`[JustBrowse] Resumed MCP session ${sessionId}`);
+    return transport;
+  }
+
+  private sendSessionNotFound(reply: FastifyReply): void {
+    reply.code(HTTP_STATUS.NOT_FOUND).send(SESSION_NOT_FOUND_BODY);
   }
 
   private touchStreamableSession(

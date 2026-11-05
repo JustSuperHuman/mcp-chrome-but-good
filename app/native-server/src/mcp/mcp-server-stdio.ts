@@ -116,9 +116,8 @@ const handleToolCall = async (name: string, args: any): Promise<CallToolResult> 
       return result as CallToolResult;
     } catch (error: any) {
       const message = error?.message || String(error);
-      const connectionFailure = /EOF|closed|ECONNREFUSED|fetch failed|client is closing/i.test(
-        message,
-      );
+      const connectionFailure =
+        /EOF|closed|ECONNREFUSED|fetch failed|client is closing|Session not found/i.test(message);
       if (attempt === 0 && connectionFailure) {
         console.error(`[justbrowse-stdio] Tool connection failed; retrying once: ${message}`);
         continue;

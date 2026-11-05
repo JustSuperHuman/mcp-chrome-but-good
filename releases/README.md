@@ -6,6 +6,34 @@ Releases are published on GitHub:
 installers in the [README](../README.md#install) download the newest and check it against
 `SHA256SUMS`. `node scripts/package-release.mjs` builds them.
 
+## 1.1.3 — 2026-11-04
+
+Extension **1.1.3** pairs with native bridge **1.1.3**. Only the bridge changed.
+
+- Agents keep the browser after a break. The bridge used to forget an MCP session
+  after 30 idle minutes, or whenever it restarted along with the browser. From then
+  on it answered every call from that client with
+  `HTTP 400: Invalid MCP request or session.`, while the extension still showed
+  Connected. Codex never recovered without a restart. The bridge now resumes the
+  session under the ID the client already holds, so the next call works. After a
+  bridge restart the agent keeps its tabs too.
+- A session ID the bridge never issued gets `404 Session not found`, the MCP spec's
+  signal to start a new session, instead of a 400.
+- Idle sessions keep their tabs for 4 hours instead of 30 minutes.
+  `CHROME_MCP_SESSION_IDLE_MS` still overrides this.
+- Ending a session that already expired succeeds and frees its tabs. The stdio
+  bridge reconnects when it sees `Session not found`.
+
+Run the one-line installer to update. It restarts the bridge, and agents that are
+already running carry on without being restarted. Reloading the extension only
+updates its version number; its code is unchanged.
+
+Validation: 669 extension tests and 156 native tests pass. Ten new session tests
+fail against 1.1.2 with its 400. Resuming works with the pinned MCP SDK 1.24.3 and
+the current 1.32.2. On a live Edge bridge, a session opened before a restart made a
+browser call after it under the same ID. Release, HTTP/SSE, framing and
+English-text checks pass.
+
 ## 1.1.2 — 2026-10-31
 
 Extension **1.1.2** pairs with native bridge **1.1.2**.

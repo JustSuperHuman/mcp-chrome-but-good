@@ -72,9 +72,16 @@ export function getChromeMcpHost(): string {
   return process.env[CHROME_MCP_HOST_ENV] || SERVER_CONFIG.HOST;
 }
 
+/**
+ * How long an MCP session may sit idle before the bridge drops it and frees its tabs. A client
+ * that comes back later is resumed transparently, but it has lost its tabs by then, so this
+ * covers a long break without holding a dead agent's tabs all day.
+ */
+export const DEFAULT_SESSION_IDLE_MS = 4 * 60 * 60 * 1000;
+
 export function getChromeMcpSessionIdleMs(): number {
   const configured = Number.parseInt(process.env[CHROME_MCP_SESSION_IDLE_MS_ENV] || '', 10);
-  return Number.isFinite(configured) && configured > 0 ? configured : 30 * 60 * 1000;
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_SESSION_IDLE_MS;
 }
 
 /**
